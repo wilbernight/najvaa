@@ -292,6 +292,7 @@ function wireSend(obj) {
 async function onWire(msg) {
   switch (msg.t) {
     case 'welcome':
+      checkUpdate(); // a reconnect is often a relay restart, i.e. a release
       iceServers = Array.isArray(msg.ice) ? msg.ice : [];
       applyFeatures(msg.features);
       room.creating = false;
@@ -387,7 +388,7 @@ function failAuth(s) {
   banner('رمز اتاق یکی از دستگاه‌ها با شما یکی نیست (یا کسی در مسیر ارتباط دست برده است). با آن دستگاه هیچ پیامی رد و بدل نشد.', {
     label: 'وارد کردن دوباره‌ی رمز',
     fn: () => { leaving = true; location.replace(`/#${room.code}`); },
-  });
+  }, 'auth');
 }
 
 async function endSession(pid) {
@@ -551,7 +552,7 @@ async function onInner(s, o) {
     case 'confirm':
       if (s.secure) return;
       s.secure = true;
-      banner('');
+      clearBanner('auth'); // only the password warning; other banners stay
       await sendInner(s, { k: 'hi', name: myName, dv: myDev, ty: matchMedia('(pointer: coarse)').matches ? 'm' : 'd' });
       updatePresence();
       await flushOutbox(s);
@@ -4242,21 +4243,29 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-16.5';
+const APP_VERSION = '2026-10-16.6';
+// The notice has its own bar (not the shared banner, which other events clear),
+// and is checked every few minutes, on return to the app and on every
+// reconnect, so restarting the relay after a release reaches everyone at once.
 let updateOffered = false;
+let updateChecking = false;
 async function checkUpdate() {
-  if (updateOffered || document.hidden) return;
+  if (updateOffered || updateChecking || document.hidden) return;
+  updateChecking = true;
   try {
     const r = await fetch('/version.json', { cache: 'no-store', credentials: 'omit' });
     const { v } = await r.json();
     if (typeof v !== 'string' || v === APP_VERSION) return;
     updateOffered = true;
     if ($('chat').hidden) { leaving = true; location.reload(); return; } // nothing to lose yet
-    banner('نسخه‌ی جدید نجوا منتشر شده است. برای استفاده از آن صفحه را دوباره بارگذاری کنید؛ پیام‌ها رمزشده روی سرور هستند و برمی‌گردند.', {
-      label: 'بارگذاری دوباره',
-      fn: () => { leaving = true; location.replace(room.code ? `/#${room.code}` : '/'); }, // only the password is asked again
-    });
-  } catch {}
+    $('update-bar').hidden = false;
+  } catch {} finally {
+    updateChecking = false;
+  }
+}
+function applyUpdate() {
+  leaving = true;
+  location.replace(room.code ? `/#${room.code}` : '/'); // only the password is asked again
 }
 
 // ---------- emoji: Animated Fluent set ----------
@@ -4497,10 +4506,11 @@ function notice(text, kind = '') {
   setTimeout(() => li.remove(), 20000);
 }
 
-function banner(text, action) {
+function banner(text, action, key = '') {
   const b = $('banner');
   b.hidden = !text;
   b.textContent = '';
+  b.dataset.key = text ? key : '';
   if (!text) return;
   const body = el('div');
   body.append(el('div', '', text));
@@ -4512,6 +4522,9 @@ function banner(text, action) {
     body.append(btn);
   }
   b.append(icon('alert'), body);
+}
+function clearBanner(key) {
+  if ($('banner').dataset.key === key) banner('');
 }
 
 function toast(text) {
@@ -5469,7 +5482,10 @@ function bindUi() {
 
   // Privacy: hide content when the window loses focus, flag screenshot keys.
   setTimeout(checkUpdate, 5000);
-  setInterval(checkUpdate, 30 * 60000);
+  setInterval(checkUpdate, 5 * 60000);
+  window.addEventListener('focus', checkUpdate);
+  window.addEventListener('online', checkUpdate);
+  $('update-btn').onclick = applyUpdate;
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) checkUpdate();
     if (document.hidden) lockNow();

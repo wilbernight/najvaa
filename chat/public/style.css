@@ -976,3 +976,10 @@ body.veil .msg.peek .edit-prev-text, body.veil .msg.reveal .edit-prev-text { fil
 .reply-bar.editing { border-inline-start-color: #f59e0b; }
 .reply-bar.editing > .i, .reply-bar.editing .reply-who { color: #f59e0b; transform: none; }
 
+/* ---------- update bar (Signal-style, blue) ---------- */
+.update-bar { display: flex; align-items: center; gap: 10px; margin: 10px 12px 0; padding: 10px 12px; border-radius: 12px; background: var(--brand); color: #fff; font-size: 13px; line-height: 1.6; animation: rise .25s var(--ease); }
+.update-bar > .i { width: 20px; height: 20px; flex: none; }
+.update-bar span { flex: 1; min-width: 0; }
+.update-bar .btn { flex: none; background: #fff; color: var(--brand-1); border: 0; font-weight: 700; }
+@media (min-width: 1024px) { .update-bar { margin: 12px 22px 0; } }
+
