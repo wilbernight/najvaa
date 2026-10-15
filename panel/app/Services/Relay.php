@@ -40,6 +40,16 @@ class Relay
         return (int) $this->http()->post('/rooms/kick', ['id' => $roomId])->throw()->json('kicked');
     }
 
+    /**
+     * Forget which device registered a room's store. The stored ciphertext is
+     * kept; the devices register again with their password-derived token on the
+     * next write. Used when a room's history was claimed by another password.
+     */
+    public function resetRoom(string $roomId): bool
+    {
+        return (bool) $this->http()->post('/rooms/reset', ['id' => $roomId])->throw()->json('reset');
+    }
+
     public function runJanitor(): array
     {
         return $this->http()->post('/janitor')->throw()->json();

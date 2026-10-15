@@ -15,8 +15,12 @@
 //   travels as encrypted binary chunks, the last one padded.
 // Calls: WebRTC signaling travels inside this channel, so DTLS fingerprints
 //   are authenticated; audio frames get a second AES-GCM layer on top of SRTP.
-// Nothing is written to disk or browser storage; messages self-destruct after
-// they are read.
+// Storage: live messages only sit in memory and self-destruct after they are
+//   read. Two things do touch storage, both encrypted with a key from the room
+//   code + password: items you explicitly "keep" (music/photos/videos) in
+//   IndexedDB on the device, and the finished message log on the server so the
+//   chat is still there after closing the tab (the relay only ever holds
+//   ciphertext).
 
 const subtle = crypto.subtle;
 const te = new TextEncoder();
@@ -379,7 +383,10 @@ async function endSession(pid) {
   const s = sessions.get(pid);
   if (!s) return;
   sessions.delete(pid);
-  if (call && (call.peer === pid || (!call.peer && !anySecure()))) hangupLocal('ارتباط قطع شد');
+  // Losing a signaling session must not end a live call: the audio path is
+  // peer-to-peer and usually survives a network blip. Hold the call and give
+  // the signaling time to come back (a fresh handshake re-arms it).
+  if (call && (call.peer === pid || (!call.peer && !anySecure()))) armGrace(call);
   for (const [id, inc] of incoming) if (inc.from === pid) { failTransfer(inc.entry); incoming.delete(id); }
   wipe(s.root, s.sas, s.send?.ck);
   if (s.recv) for (const ch of s.recv.values()) wipe(ch.ck);
@@ -390,7 +397,9 @@ async function endSession(pid) {
 
 async function endAllSessions() {
   for (const pid of [...sessions.keys()]) await endSession(pid);
-  hangupLocal('');
+  // The socket dropped (or is about to re-handshake): keep a live call and let
+  // it heal instead of hanging up on the spot.
+  if (call) armGrace(call);
 }
 
 // Switches the admin can flip; the relay sends them on connect.
@@ -532,6 +541,7 @@ async function onInner(s, o) {
       await sendInner(s, { k: 'hi', name: myName, dv: myDev, ty: matchMedia('(pointer: coarse)').matches ? 'm' : 'd' });
       updatePresence();
       await flushOutbox(s);
+      resumeCall(s.peer); // signaling is back: fix the media path if it broke
       break;
     case 'hi': {
       const name = typeof o.name === 'string' ? o.name.replace(/\s+/g, ' ').trim().slice(0, 30) : '';
@@ -2617,6 +2627,17 @@ let histMore = false;
 let histLoading = false;
 let insertAnchor = null; // set while older history is inserted above the chat
 
+// The relay refuses a room whose stored history was registered with a different
+// password-derived token (whoever wrote first owns the registration). It never
+// leaks content, but history quietly stops working, so say it once rather than
+// failing silently.
+let storeClaimed = false;
+function storeClaimedNotice() {
+  if (storeClaimed) return;
+  storeClaimed = true;
+  banner('تاریخچه‌ی رمزشده‌ی این اتاق روی سرور توسط رمزی دیگر قفل شده است؛ این دستگاه نمی‌تواند آن را بخواند یا بنویسد. گفتگوی زنده بی‌اشکال است. اگر این شما نبودید، از پنل مدیریت «بازنشانی ثبت اتاق» را بزنید.', { label: 'بستن', fn: () => banner('') });
+}
+
 function storeFetch(url, init = {}) {
   const headers = { 'X-Room': room.id, 'X-Room-Auth': room.storeAuth };
   if (typeof init.body === 'string') headers['Content-Type'] = 'application/json';
@@ -2632,7 +2653,11 @@ async function storeEvent(ev, opts = {}) {
     try {
       const r = await storeFetch('/h/log', { method: 'POST', body });
       if (r.ok) return (await r.json()).ts;
-      if (r.status === 403) break;
+      if (r.status === 403) {
+        const j = await r.json().catch(() => null);
+        if (j && j.claimed) storeClaimedNotice();
+        break;
+      }
     } catch {}
     await sleep(1200 * (attempt + 1));
   }
@@ -2809,7 +2834,12 @@ async function loadHistory(initial) {
     const q = new URLSearchParams({ limit: '80' });
     if (!initial && histBefore) q.set('before', String(histBefore));
     const r = await storeFetch('/h/log?' + q);
-    if (r.status === 403) { banner('به تاریخچه‌ی این اتاق دسترسی ندارید: رمز با رمز این اتاق یکی نیست.'); return; }
+    if (r.status === 403) {
+      const j = await r.json().catch(() => null);
+      if (j && j.claimed) storeClaimedNotice();
+      else banner('به تاریخچه‌ی این اتاق دسترسی ندارید: رمز با رمز این اتاق یکی نیست.');
+      return;
+    }
     if (!r.ok) throw new Error('history');
     const { items, more } = await r.json();
     histMore = !!more;
@@ -3894,7 +3924,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-15.1';
+const APP_VERSION = '2026-10-15.2';
 let updateOffered = false;
 async function checkUpdate() {
   if (updateOffered || document.hidden) return;
@@ -4099,12 +4129,15 @@ const FE_SUPPORTED = FE_SCRIPT || FE_LEGACY;
 let call = null;
 const iceWaiters = [];
 
-// TURN credentials expire; fetch fresh ones before every call.
+// TURN credentials expire, but the ones handed out at connect time are valid
+// for hours. Ask for fresh ones in the background and never let that round-trip
+// hold up a call; only a call placed before we ever received any waits briefly.
 function refreshIce() {
+  wireSend({ t: 'ice?' });
+  if (iceServers.length) return Promise.resolve();
   return new Promise((resolve) => {
     iceWaiters.push(resolve);
-    wireSend({ t: 'ice?' });
-    setTimeout(resolve, 2000);
+    setTimeout(resolve, 800);
   });
 }
 const hasTurn = () => iceServers.some((s) => [].concat(s.urls).some((u) => /^turns?:/.test(u)));
@@ -4121,12 +4154,19 @@ async function startCall() {
   call = { id: b64u(rand(9)), role: 'caller', secret: rand(32), stream, fxCtx, state: 'ringing', pending: [], peer: null, declined: new Set() };
   showCall('در حال زنگ زدن…', false);
   const c = call;
-  await setupCallFx(c);
-  if (call !== c) return;
+  // Ring before anything else: the other phone starts ringing at once, while we
+  // refresh ICE, warm the voice filter and start gathering candidates in the
+  // background. Everything is ready by the time the other side answers.
+  const ice = refreshIce();
   post({ k: 'call', op: 'ring', id: c.id, secret: b64u(c.secret), fe: FE_SUPPORTED })
     .then((targets) => { c.rang = new Set(targets); })
     .catch(() => hangupLocal(''));
   call.timeout = setTimeout(() => hangup('پاسخی داده نشد'), 45000);
+  await ice;
+  if (call !== c) return;
+  await setupCallFx(c);
+  if (call !== c) return;
+  warmPeer(c); // starts gathering: the TURN allocation takes a round-trip
 }
 
 // Call audio route. On phones a call starts on the earpiece (it is private);
@@ -4217,6 +4257,8 @@ async function onCallSignal(s, o) {
     if (call) { await sendInner(s, { k: 'call', op: 'busy', id: o.id }); return; }
     call = { id: o.id, role: 'callee', secret: unb64u(o.secret), peerFe: !!o.fe, state: 'incoming', pending: [], peer: s.peer };
     if (call.secret.length !== 32) { call = null; return; }
+    call.fe = FE_SUPPORTED && !!o.fe;
+    warmPeer(call); // start the TURN allocation while the phone is still ringing
     showCall(`تماس صوتی از ${peerName(s.peer)}…`, true);
     ring(true);
     call.timeout = setTimeout(() => hangup(''), 45000);
@@ -4248,6 +4290,9 @@ async function onCallSignal(s, o) {
       call.state = 'connecting';
       call.fe = FE_SUPPORTED && !!o.fe;
       setCallState('در حال برقراری اتصال…');
+      // The anonymous-voice filter must be in place before our microphone is
+      // added: the raw voice must never go out when the filter is on.
+      await setupCallFx(call);
       await setupPeer();
       await call.pc.setLocalDescription(await call.pc.createOffer());
       await sendInner(s, { k: 'call', op: 'offer', id: call.id, sdp: call.pc.localDescription.sdp });
@@ -4255,10 +4300,20 @@ async function onCallSignal(s, o) {
     case 'offer':
       if (call.role !== 'callee' || !pc) return;
       await pc.setRemoteDescription({ type: 'offer', sdp: o.sdp });
-      addLocalTrack();
+      if (!o.restart) addLocalTrack(); // a re-negotiation must not add a second track
       await flushIce();
       await pc.setLocalDescription(await pc.createAnswer());
       await sendInner(s, { k: 'call', op: 'answer', id: call.id, sdp: pc.localDescription.sdp });
+      break;
+    case 'heal': // the other side's media path broke: renegotiate for it
+      if (call.role === 'caller' && pc) {
+        clearHeal(call);
+        clearGrace(call);
+        // Our own path may look fine while theirs does not, so restart anyway -
+        // but off this task, because an ICE restart submits to the serial queue.
+        const c2 = call;
+        setTimeout(() => { if (call === c2) iceRestart(c2); }, 0);
+      }
       break;
     case 'answer':
       if (call.role !== 'caller' || !pc) return;
@@ -4316,24 +4371,26 @@ async function acceptCall() {
   });
 }
 
-async function setupPeer() {
-  const c = call;
-  // With a TURN relay available, route media only through it: neither side
-  // learns the other's IP address.
-  const config = { iceServers, bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require', iceTransportPolicy: hasTurn() ? 'relay' : 'all' };
-  if (c.fe && !FE_SCRIPT) config.encodedInsertableStreams = true;
-  const pc = new RTCPeerConnection(config);
-  c.pc = pc;
+// One RTCPeerConnection per call, built as early as we can. With a TURN relay
+// the allocation is a round-trip and gathering is the slowest part of setting a
+// call up, so iceCandidatePoolSize makes the browser start it immediately -
+// while the other phone is still ringing.
+function makePc(c) {
+  const config = {
+    iceServers,
+    bundlePolicy: 'max-bundle',
+    rtcpMuxPolicy: 'require',
+    iceTransportPolicy: hasTurn() ? 'relay' : 'all', // through the relay only: neither side learns the other's IP
+    iceCandidatePoolSize: 2,
+  };
+  if (!FE_SCRIPT) config.encodedInsertableStreams = true;
+  return new RTCPeerConnection(config);
+}
 
-  if (c.fe) {
-    const c2e = await hkdf(c.secret, ZERO, `wn1/call/${c.id}/caller`);
-    const e2c = await hkdf(c.secret, ZERO, `wn1/call/${c.id}/callee`);
-    const [enc, dec] = c.role === 'caller' ? [c2e, e2c] : [e2c, c2e];
-    c.worker = new Worker('/frame-worker.js');
-    c.worker.postMessage({ op: 'keys', enc: enc.buffer, dec: dec.buffer }, [enc.buffer, dec.buffer]);
-  }
-  wipe(c.secret);
-
+function warmPeer(c) {
+  if (!c || call !== c || c.pc) return;
+  try { c.pc = makePc(c); } catch { c.pc = null; return; }
+  const pc = c.pc;
   pc.onicecandidate = (e) => {
     if (e.candidate && call === c && c.peer) postTo(c.peer, { k: 'call', op: 'ice', id: c.id, c: e.candidate.toJSON() }).catch(() => {});
   };
@@ -4344,25 +4401,123 @@ async function setupPeer() {
     $('remote-audio').play().catch(() => {});
     if (audioRoute.speaker) setSpeaker(true);
   };
-  pc.onconnectionstatechange = () => {
-    if (call !== c) return;
-    if (pc.connectionState === 'connected' && c.state !== 'active') {
+  pc.onconnectionstatechange = () => onPcState(c);
+}
+
+async function setupPeer() {
+  const c = call;
+  warmPeer(c);
+  if (!c.keyed) {
+    c.keyed = true;
+    if (c.fe) {
+      const c2e = await hkdf(c.secret, ZERO, `wn1/call/${c.id}/caller`);
+      const e2c = await hkdf(c.secret, ZERO, `wn1/call/${c.id}/callee`);
+      const [enc, dec] = c.role === 'caller' ? [c2e, e2c] : [e2c, c2e];
+      c.worker = new Worker('/frame-worker.js');
+      c.worker.postMessage({ op: 'keys', enc: enc.buffer, dec: dec.buffer }, [enc.buffer, dec.buffer]);
+    }
+    wipe(c.secret);
+  }
+  $('call-crypto').textContent = c.fe
+    ? 'رمزنگاری دولایه · DTLS-SRTP + AES-256-GCM'
+    : 'رمزنگاری سرتاسری · DTLS-SRTP';
+  if (c.role === 'caller') addLocalTrack();
+}
+
+// A call that loses its media path is not over. Ask for a fresh ICE negotiation
+// over the (already encrypted) signaling channel and keep trying for a while.
+function clearHeal(c) { clearTimeout(c.heal); c.heal = null; }
+function armHeal(c, ms) {
+  clearTimeout(c.heal);
+  c.heal = setTimeout(() => { c.heal = null; healCall(c); }, ms);
+}
+function clearGrace(c) { clearTimeout(c.grace); c.grace = null; }
+
+// The signaling socket (not the audio) went away. Hold the call: the audio is
+// peer-to-peer and usually keeps flowing, and a re-handshake re-arms it.
+function armGrace(c) {
+  if (!c || call !== c) return;
+  if (c.pc?.connectionState === 'connected' && c.state === 'active') {
+    setCallState('سیگنالینگ قطع شد؛ صدا برقرار است');
+    return; // audio is fine; if it drops too, onPcState starts the timer
+  }
+  if (c.grace) return;
+  setCallState('ارتباط قطع شد؛ در حال اتصال مجدد…');
+  c.grace = setTimeout(() => { c.grace = null; if (call === c) hangupLocal('ارتباط قطع شد'); }, 30000);
+}
+
+function onPcState(c) {
+  if (call !== c || !c.pc) return;
+  const st = c.pc.connectionState;
+  if (st === 'connected') {
+    clearHeal(c);
+    clearGrace(c);
+    c.heals = 0; // a recovered call gets a fresh budget for the next blip
+    if (c.state !== 'active') {
       c.state = 'active';
       c.started = Date.now();
-      setCallState('متصل');
       $('call').classList.add('active');
       $('call-timer').hidden = false;
       $('mute-btn').hidden = false;
       $('speaker-btn').hidden = !(IS_IOS || IS_ANDROID);
       c.clock = setInterval(() => { $('call-timer').textContent = fmtDuration(Math.floor((Date.now() - c.started) / 1000)); }, 1000);
-    } else if (pc.connectionState === 'failed') {
-      hangup(hasTurn() ? 'اتصال صوتی برقرار نشد؛ دوباره تلاش کنید' : 'اتصال صوتی برقرار نشد (سرور رله‌ی تماس هنوز تنظیم نشده)');
     }
-  };
-  $('call-crypto').textContent = c.fe
-    ? 'رمزنگاری دولایه · DTLS-SRTP + AES-256-GCM'
-    : 'رمزنگاری سرتاسری · DTLS-SRTP';
-  if (c.role === 'caller') addLocalTrack();
+    setCallState('متصل');
+  } else if (st === 'disconnected') {
+    if (c.state === 'active') setCallState('اتصال ضعیف است…');
+    armHeal(c, 6000); // phones drop to this on a network switch and often recover alone
+  } else if (st === 'failed') {
+    healCall(c);
+  }
+}
+
+// The signaling below is submitted to the serial queue from here, and a heal can
+// be triggered from inside that queue (a re-handshake, or the peer asking us to
+// renegotiate). Nesting a submission would deadlock the queue and freeze every
+// message, so the work always starts on its own task.
+function healCall(c) {
+  if (!c || call !== c || !c.pc) return;
+  if (c.pc.connectionState === 'connected') return;
+  if (c.heals === undefined) c.heals = 0;
+  if (++c.heals > 5) { hangupLocal('ارتباط صوتی قطع شد'); return; }
+  setCallState('در حال بازیابی ارتباط…');
+  const s = [...secureSessions()].find((x) => x.peer === c.peer);
+  if (!s) { armGrace(c); return; } // no signaling right now: wait for it to return
+  setTimeout(() => {
+    if (call !== c) return;
+    if (c.role === 'caller') {
+      iceRestart(c).then((ok) => { if (!ok) armHeal(c, 4000); });
+    } else {
+      // Only the caller offers: ask it to renegotiate.
+      serial(() => sendInner(s, { k: 'call', op: 'heal', id: c.id }))
+        .catch(() => {}).then(() => armHeal(c, 7000));
+    }
+  }, 0);
+}
+
+async function iceRestart(c) {
+  const s = [...secureSessions()].find((x) => x.peer === c.peer);
+  if (!s || !c.pc || call !== c) return false;
+  try {
+    let ok = false;
+    await serial(async () => {
+      if (call !== c || !c.pc) return;
+      const offer = await c.pc.createOffer({ iceRestart: true });
+      await c.pc.setLocalDescription(offer);
+      await sendInner(s, { k: 'call', op: 'offer', id: c.id, sdp: c.pc.localDescription.sdp, restart: 1 });
+      ok = true;
+    });
+    return ok;
+  } catch { return false; }
+}
+
+// A fresh handshake with that device finished: signaling is available again.
+function resumeCall(peer) {
+  const c = call;
+  if (!c || c.peer !== peer) return;
+  clearGrace(c);
+  if (c.pc && c.pc.connectionState !== 'connected') healCall(c);
+  else if (c.state === 'active') setCallState('متصل');
 }
 
 function addLocalTrack() {
@@ -4413,6 +4568,8 @@ function hangupLocal(reason) {
   call = null;
   ring(false);
   clearTimeout(c.timeout);
+  clearTimeout(c.grace);
+  clearTimeout(c.heal);
   clearInterval(c.clock);
   c.stream?.getTracks().forEach((t) => t.stop());
   closeCallFx(c);

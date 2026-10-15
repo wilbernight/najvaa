@@ -436,6 +436,13 @@ nginx_config() {
     echo "}"
   } >/etc/nginx/conf.d/najva-cloudflare.conf
 
+  # Per-client limits for the two endpoints that fetch from the internet for a
+  # client (Instagram previews, GIF search). Counters are in memory only.
+  cat >/etc/nginx/conf.d/najva-limits.conf <<'EOF'
+limit_req_zone $binary_remote_addr zone=najva_fetch:10m rate=30r/m;
+limit_req_status 429;
+EOF
+
   cat >/etc/nginx/snippets/najva-origin.conf <<EOF
 ssl_certificate     $CERT_DIR/origin.pem;
 ssl_certificate_key $CERT_DIR/origin.key;
@@ -520,6 +527,7 @@ server {
     location = /preview {
         limit_except POST { deny all; }
         client_max_body_size 8k;
+        limit_req zone=najva_fetch burst=10 nodelay;
         proxy_pass http://127.0.0.1:8787;
         proxy_http_version 1.1;
         proxy_set_header Origin $http_origin;
@@ -535,6 +543,19 @@ server {
         proxy_set_header Origin $http_origin;
         proxy_read_timeout 120s;
         proxy_send_timeout 120s;
+    }
+
+    # GIF search reads Giphy/Tenor on the server, so it is limited per client;
+    # the media files are not (a result page loads dozens).
+    location = /gif/search {
+        limit_except POST { deny all; }
+        client_max_body_size 4k;
+        limit_req zone=najva_fetch burst=10 nodelay;
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Origin $http_origin;
+        proxy_set_header Sec-Fetch-Site $http_sec_fetch_site;
+        proxy_read_timeout 20s;
     }
 
     location ^~ /gif/ {

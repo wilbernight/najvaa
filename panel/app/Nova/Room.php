@@ -4,6 +4,7 @@ namespace App\Nova;
 
 use App\Nova\Actions\DeleteRoom;
 use App\Nova\Actions\KickRoom;
+use App\Nova\Actions\ResetRoom;
 use App\Nova\Actions\RunJanitor;
 use Illuminate\Contracts\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
@@ -76,6 +77,7 @@ class Room extends Resource
     {
         return [
             KickRoom::make()->showInline(),
+            ResetRoom::make()->showInline(),
             DeleteRoom::make()->showInline(),
             RunJanitor::make()->standalone(),
         ];

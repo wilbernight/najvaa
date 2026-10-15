@@ -55,6 +55,8 @@ server {
     location = /preview {
         limit_except POST { deny all; }
         client_max_body_size 8k;
+        # One client cannot use up the shared preview budget (see conf.d/najva-limits.conf).
+        limit_req zone=najva_fetch burst=10 nodelay;
         proxy_pass http://127.0.0.1:8787;
         proxy_http_version 1.1;
         proxy_set_header Origin $http_origin;
@@ -72,6 +74,20 @@ server {
         proxy_send_timeout 120s;
     }
 
+    # GIF search makes the server read Giphy/Tenor, so it is limited per client.
+    location = /gif/search {
+        limit_except POST { deny all; }
+        client_max_body_size 4k;
+        limit_req zone=najva_fetch burst=10 nodelay;
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Origin $http_origin;
+        proxy_set_header Sec-Fetch-Site $http_sec_fetch_site;
+        proxy_read_timeout 20s;
+    }
+
+    # The GIF files themselves are served by the relay and a result page loads
+    # dozens at once, so the media path is not rate limited.
     location ^~ /gif/ {
         limit_except GET POST { deny all; }
         client_max_body_size 4k;

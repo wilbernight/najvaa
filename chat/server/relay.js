@@ -80,8 +80,13 @@ const IMG_HOST_RE = /(^|\.)(cdninstagram\.com|fbcdn\.net)$/i;
 const IG_PATH_RE = /^\/(?:[A-Za-z0-9_.]+\/)?(p|reel|reels|tv)\/([A-Za-z0-9_-]{5,64})/;
 const SHARE_PATH_RE = /^\/share\/(?:p|reel|reels|v)?\/?[A-Za-z0-9_-]{5,64}/;
 const UA = 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)';
-let previewBudget = 40;
-setInterval(() => { previewBudget = 40; }, 60000);
+let previewBudget = 240;
+setInterval(() => { previewBudget = 240; }, 60000);
+// The same post is often asked for twice (the other device, or a retry): keep
+// the built preview for a few minutes, so a repeat costs neither a budget unit
+// nor another fetch. In memory only, never on disk.
+const previewCache = new Map(); // url -> { at, result }
+const PREVIEW_TTL = 10 * 60 * 1000;
 
 async function fetchLimited(start, allowHost, maxBytes, accept, truncate, ua = UA) {
   let url = start;
@@ -167,7 +172,6 @@ function handlePreview(req, res) {
   };
   if (!okOrigin(req.headers.origin)) return reply(403, {});
   if (!feature('preview')) return reply(503, { error: 'disabled' });
-  if (--previewBudget < 0) return reply(429, {});
   let body = '';
   req.setEncoding('utf8');
   req.on('data', (c) => { body += c; if (body.length > 4096) req.destroy(); });
@@ -175,7 +179,13 @@ function handlePreview(req, res) {
     try {
       const { u } = JSON.parse(body);
       if (typeof u !== 'string' || u.length > 500) throw new Error('bad');
-      reply(200, await buildPreview(u));
+      const hit = previewCache.get(u);
+      if (hit && Date.now() - hit.at < PREVIEW_TTL) return reply(200, hit.result);
+      if (--previewBudget < 0) return reply(429, {});
+      const result = await buildPreview(u);
+      previewCache.set(u, { at: Date.now(), result });
+      if (previewCache.size > 300) previewCache.delete(previewCache.keys().next().value);
+      reply(200, result);
     } catch {
       reply(422, {});
     }
@@ -197,8 +207,8 @@ const GIF_MEDIA = {
 };
 const GIF_HOSTS = { g: /^media[0-9]?\.giphy\.com$/, t: /^media[0-9]?\.tenor\.com$/ };
 const gifCache = new Map(); // query -> { at, items }, in memory only
-let gifBudget = 150;
-setInterval(() => { gifBudget = 150; }, 3600000);
+let gifBudget = 900;
+setInterval(() => { gifBudget = 900; }, 3600000);
 
 function readBody(req, limit) {
   return new Promise((resolve, reject) => {
@@ -304,6 +314,12 @@ const ENTRY_RE = /^(\d{13})-([A-Za-z0-9_-]{8,32})-(\d{1,13})-([01])\.json$/;
 const MAX_ENTRY = 900 * 1024;
 const MAX_CHUNK = 300 * 1024;
 const MAX_CHUNKS = 2000;
+// A room with nothing stored in it is only a reservation: forget it after this
+// long, so empty rooms cannot pile up (or squat a code) for months.
+const EMPTY_ROOM_MS = Number(process.env.STORE_EMPTY_ROOM_HOURS || 24) * 3600000;
+// Hard ceiling on how many room directories may exist; beyond it new rooms are
+// refused, so the store cannot be filled up with reservations.
+const MAX_STORE_ROOMS = Number(process.env.STORE_MAX_ROOMS || 20000);
 let storeTotal = 0;
 let storeBudget = 6000;
 setInterval(() => { storeBudget = 6000; }, 60000);
@@ -327,9 +343,10 @@ async function readBodyBuf(req, limit) {
   return Buffer.concat(parts);
 }
 
-// Resolves to the room directory when the token matches. Only a write may
-// register a new room (first writer's token wins); reads of an unknown room
-// resolve to { empty: true } without creating anything.
+// Resolves to the room directory when the token matches. Only a complete,
+// valid entry may register a new room (first writer's token wins); reads of an
+// unknown room resolve to { empty: true } without creating anything, and a
+// token that is not the registered one comes back as { claimed: true }.
 async function storeAuth(req, mayCreate) {
   const room = req.headers['x-room'] || '';
   const token = req.headers['x-room-auth'] || '';
@@ -340,12 +357,19 @@ async function storeAuth(req, mayCreate) {
   let saved = await fsp.readFile(authFile).catch(() => null);
   if (!saved && !mayCreate) return { empty: true };
   if (!saved) {
+    // Only a genuinely new room counts against the cap: a room whose
+    // registration was reset must always be able to register again.
+    const known = await fsp.stat(dir).then(() => true).catch(() => false);
+    if (!known) {
+      const roomsNow = await fsp.readdir(ROOMS_DIR).catch(() => []);
+      if (roomsNow.length >= MAX_STORE_ROOMS) return { full: true };
+    }
     await fsp.mkdir(path.join(dir, 'log'), { recursive: true });
     await fsp.mkdir(path.join(dir, 'blob'), { recursive: true });
     await fsp.writeFile(authFile, hash, { flag: 'wx' }).catch(() => {});
     saved = await fsp.readFile(authFile).catch(() => null);
   }
-  if (!saved || saved.length !== hash.length || !crypto.timingSafeEqual(saved, hash)) return null;
+  if (!saved || saved.length !== hash.length || !crypto.timingSafeEqual(saved, hash)) return { claimed: true };
   return { dir };
 }
 
@@ -379,25 +403,38 @@ async function handleStore(req, res) {
   if (req.method !== 'GET' && !okOrigin(req.headers.origin)) return json(res, 403, {});
   if (--storeBudget < 0) return json(res, 429, {});
   const parts = url.pathname.split('/').filter(Boolean); // ['h', ...]
-  const writes = (req.method === 'POST' && parts[1] === 'log') || req.method === 'PUT';
-  const auth = await storeAuth(req, writes);
-  if (!auth) return json(res, 403, { error: 'auth' });
-  if (auth.empty) {
-    if (parts[1] === 'log') return json(res, 200, { items: [], more: false });
-    if (parts[1] === 'usage') return json(res, 200, { roomBytes: 0, roomItems: 0, totalBytes: storeTotal, capBytes: CAP_BYTES, maxDays: MAX_AGE_MS / 86400000 });
-    if (req.method === 'POST') return json(res, 200, {});
-    return json(res, 404, {});
-  }
-  const { dir } = auth;
   try {
+    // Only a real, well-formed write may open a room directory: a malformed
+    // body, or an empty reservation, must not leave a directory behind
+    // (otherwise anyone could fill the disk with empty rooms).
+    let entry = null;
+    let chunk = null;
+    const isLog = req.method === 'POST' && parts[1] === 'log';
+    const isBlob = req.method === 'PUT' && parts[1] === 'blob' && EID_RE.test(parts[2] || '') && /^\d{1,4}$/.test(parts[3] || '') && Number(parts[3]) < MAX_CHUNKS;
+    if (isLog) {
+      entry = JSON.parse((await readBodyBuf(req, MAX_ENTRY)).toString('utf8'));
+      if (!EID_RE.test(entry.id) || typeof entry.iv !== 'string' || typeof entry.ct !== 'string' || entry.iv.length > 32) return json(res, 400, {});
+    } else if (isBlob) {
+      chunk = await readBodyBuf(req, MAX_CHUNK);
+      if (!chunk.length) return json(res, 400, {});
+    }
+    const auth = await storeAuth(req, isLog || isBlob);
+    if (!auth) return json(res, 403, { error: 'auth' });
+    if (auth.full) return json(res, 507, { error: 'full' });
+    if (auth.claimed) return json(res, 403, { error: 'auth', claimed: 1 });
+    if (auth.empty) {
+      if (parts[1] === 'log') return json(res, 200, { items: [], more: false });
+      if (parts[1] === 'usage') return json(res, 200, { roomBytes: 0, roomItems: 0, totalBytes: storeTotal, capBytes: CAP_BYTES, maxDays: MAX_AGE_MS / 86400000 });
+      if (req.method === 'POST') return json(res, 200, {});
+      return json(res, 404, {});
+    }
+    const { dir } = auth;
     // POST /h/log  {id, iv, ct, blob, exp}
-    if (req.method === 'POST' && parts[1] === 'log') {
-      const b = JSON.parse((await readBodyBuf(req, MAX_ENTRY)).toString('utf8'));
-      if (!EID_RE.test(b.id) || typeof b.iv !== 'string' || typeof b.ct !== 'string' || b.iv.length > 32) return json(res, 400, {});
-      const existing = (await listEntries(dir)).find((e) => e.id === b.id);
+    if (entry) {
+      const existing = (await listEntries(dir)).find((e) => e.id === entry.id);
       if (existing) return json(res, 200, { ts: existing.ts });
-      const e = { ts: Date.now(), id: b.id, exp: Number.isInteger(b.exp) && b.exp > 0 ? b.exp : 0, blob: !!b.blob };
-      const data = JSON.stringify({ iv: b.iv, ct: b.ct });
+      const e = { ts: Date.now(), id: entry.id, exp: Number.isInteger(entry.exp) && entry.exp > 0 ? entry.exp : 0, blob: !!entry.blob };
+      const data = JSON.stringify({ iv: entry.iv, ct: entry.ct });
       await writeAtomic(path.join(dir, 'log', entryName(e)), data);
       storeTotal += data.length;
       if (storeTotal > CAP_BYTES) setImmediate(janitor);
@@ -451,10 +488,10 @@ async function handleStore(req, res) {
     if (parts[1] === 'blob' && EID_RE.test(parts[2] || '') && /^\d{1,4}$/.test(parts[3] || '') && Number(parts[3]) < MAX_CHUNKS) {
       const file = path.join(dir, 'blob', parts[2], parts[3]);
       if (req.method === 'PUT') {
-        const data = await readBodyBuf(req, MAX_CHUNK);
+        if (!chunk) return json(res, 400, {}); // already read and size-checked above
         await fsp.mkdir(path.dirname(file), { recursive: true });
-        await writeAtomic(file, data);
-        storeTotal += data.length;
+        await writeAtomic(file, chunk);
+        storeTotal += chunk.length;
         if (storeTotal > CAP_BYTES) setImmediate(janitor);
         return json(res, 200, {});
       }
@@ -503,20 +540,36 @@ async function janitor() {
         if (liveBlobs.has(b)) continue;
         const p = path.join(dir, 'blob', b);
         const st = await fsp.stat(p).catch(() => null);
-        if (st && now - st.mtimeMs > 86400000) await fsp.rm(p, { recursive: true, force: true });
-        else if (st) total += await dirSize(p);
+        if (!st) continue;
+        // A blob no stored entry points at is an upload still in flight (or
+        // junk). It is dropped after a day, and it is the first thing to go
+        // when the store is above its cap - otherwise it would be a hole in it.
+        if (now - st.mtimeMs > 86400000) { await fsp.rm(p, { recursive: true, force: true }); continue; }
+        const size = await dirSize(p);
+        total += size;
+        all.push({ dir, e: { ts: st.mtimeMs, orphan: b }, size });
       }
-      // Rooms with nothing stored for a long time are forgotten entirely.
+      // A room with nothing stored in it is only a reservation: forget it
+      // quickly, so empty rooms cannot pile up or squat a code for long.
       const st = await fsp.stat(path.join(dir, 'auth')).catch(() => null);
-      if (!liveBlobs.size && !(await listEntries(dir)).length && st && now - st.mtimeMs > MAX_AGE_MS) {
+      const empty = !liveBlobs.size && !(await listEntries(dir)).length;
+      if (empty && st && now - st.mtimeMs > EMPTY_ROOM_MS) {
         await fsp.rm(dir, { recursive: true, force: true });
+        continue;
       }
+      // The auth file and the directories themselves take real space: count
+      // them, so thousands of rooms show up against the cap as well.
+      const overhead = (st ? st.size : 0) + 8192;
+      total += overhead;
+      if (empty) all.push({ dir, e: { ts: st ? st.mtimeMs : 0, empty: true }, size: overhead });
     }
     if (total > CAP_BYTES) {
       all.sort((a, b) => a.e.ts - b.e.ts);
       for (const x of all) {
         if (total <= CAP_BYTES * 0.95) break;
-        await dropEntry(x.dir, x.e);
+        if (x.e.orphan) await fsp.rm(path.join(x.dir, 'blob', x.e.orphan), { recursive: true, force: true });
+        else if (x.e.empty) await fsp.rm(x.dir, { recursive: true, force: true });
+        else await dropEntry(x.dir, x.e);
         total -= x.size;
       }
     }
@@ -676,7 +729,13 @@ const ADMIN_PORT = Number(process.env.ADMIN_PORT || 8788);
 const ADMIN_SECRET = process.env.ADMIN_SECRET || '';
 const SETTINGS_FILE = path.join(STORE, 'settings.json');
 const FEATURE_KEYS = ['gif', 'preview', 'calls', 'newRooms'];
-const settings = { capGB: 50, maxDays: 90, features: { gif: true, preview: true, calls: true, newRooms: true } };
+// Defaults come from the unit's environment; an admin settings file, once
+// written, overrides them (applySettings below).
+const settings = {
+  capGB: Number(process.env.STORE_CAP_GB) || 50,
+  maxDays: Number(process.env.STORE_MAX_DAYS) || 90,
+  features: { gif: true, preview: true, calls: true, newRooms: true },
+};
 let lastJanitorAt = 0;
 
 function applySettings(next) {
@@ -751,6 +810,13 @@ function handleAdmin(req, res) {
     }
     if (req.method === 'POST' && url.pathname === '/rooms/kick' && ROOM_RE.test(body.id || '')) {
       return json(res, 200, { kicked: dropLive(body.id, 4010, 'kicked') });
+    }
+    if (req.method === 'POST' && url.pathname === '/rooms/reset' && ROOM_RE.test(body.id || '')) {
+      // Forget which token registered this room's store. The devices register
+      // it again with their password-derived token on the next write, and the
+      // ciphertext already stored stays readable to them.
+      await fsp.rm(path.join(ROOMS_DIR, body.id, 'auth'), { force: true });
+      return json(res, 200, { reset: true });
     }
     if (req.method === 'POST' && url.pathname === '/janitor') {
       await janitor();
