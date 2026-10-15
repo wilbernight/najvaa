@@ -1004,6 +1004,9 @@ function initNotify() {
   // Phones only show notifications through a service worker (sw.js: shows
   // them and focuses the chat on tap, nothing else).
   if (notifyOn && 'serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').then((r) => { swReg = r; }).catch(() => {});
+  // Sound needs a real tap first (mobile browsers). The first tap of this visit
+  // makes the audio context, so a notification can chime afterwards.
+  if (notifyOn) for (const ev of ['pointerdown', 'keydown']) addEventListener(ev, makeSoundCtx, { once: true, capture: true });
   applyNotifyUi();
 }
 async function toggleNotify() {
@@ -1014,6 +1017,8 @@ async function toggleNotify() {
     const p = Notification.permission === 'default' ? await Notification.requestPermission() : Notification.permission;
     if (p !== 'granted') { toast('اجازه‌ی اعلان داده نشد؛ از تنظیمات مرورگر برای این سایت فعالش کنید'); applyNotifyUi(); return; }
     notifyOn = true;
+    makeSoundCtx(); // inside the tap: browsers only allow sound from a real tap
+    playChime(); // a short sample, so you can hear right away that it works
   }
   try { localStorage.setItem('najva:notify', notifyOn ? '1' : '0'); } catch {}
   initNotify();
@@ -1026,9 +1031,39 @@ function notify(kind) {
   notifyAt = now;
   const title = kind === 'call' ? 'تماس صوتی' : 'نجوا';
   const body = kind === 'call' ? 'کسی تماس گرفته' : unread > 1 ? `${fa(unread)} پیام جدید` : 'پیام جدید';
-  const opts = { body, tag: kind === 'call' ? 'najva-call' : 'najva', renotify: true, icon: '/favicon.svg', lang: 'fa', dir: 'rtl', silent: false };
+  // A call already rings (ring()), so only messages get the extra chime. When
+  // the chime really plays, the system sound is skipped so it never doubles.
+  const chimed = kind !== 'call' && playChime();
+  const opts = { body, tag: kind === 'call' ? 'najva-call' : 'najva', renotify: true, icon: '/favicon.svg', lang: 'fa', dir: 'rtl', silent: chimed };
   if (swReg) swReg.showNotification(title, opts).catch(() => {});
   else { try { const n = new Notification(title, opts); n.onclick = () => { window.focus(); n.close(); }; } catch {} }
+}
+
+// Sound for message notifications: a short two-tone chime built with Web Audio,
+// so no file is downloaded and nothing leaves the device. Browsers only let a
+// page make sound after a real tap, so the context is made on the first tap of
+// the visit (see initNotify) and reused after that.
+let soundCtx = null;
+function makeSoundCtx() { soundCtx ??= newAudioContext(); return soundCtx; }
+function playChime() {
+  try {
+    const ctx = soundCtx;
+    if (!ctx || ctx.state === 'suspended') return false;
+    const at = ctx.currentTime;
+    for (const [f, t, d] of [[880, 0, 0.16], [1174.66, 0.17, 0.26]]) {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'sine';
+      o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, at + t);
+      g.gain.exponentialRampToValueAtTime(0.12, at + t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, at + t + d);
+      o.connect(g).connect(ctx.destination);
+      o.start(at + t);
+      o.stop(at + t + d + 0.05);
+    }
+    return true;
+  } catch { return false; }
 }
 
 // ---------- text & instagram ----------
@@ -3859,7 +3894,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-09.3';
+const APP_VERSION = '2026-10-15.1';
 let updateOffered = false;
 async function checkUpdate() {
   if (updateOffered || document.hidden) return;
