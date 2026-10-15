@@ -507,7 +507,7 @@ function musicGet(url, hop = 0) {
 async function handleMusicFetch(req, res) {
   if (!okOrigin(req.headers.origin)) return json(res, 403, {});
   const auth = await storeAuth(req, false);
-  if (!auth || auth.claimed) return json(res, 403, {});
+  if (!auth?.dir) return json(res, 403, {}); // a registered room with the right key; a made-up room id is not enough
   if (musicActive >= 2) return json(res, 429, { error: 'busy' });
   if (--musicBudget < 0) return json(res, 429, {});
   musicActive++;
