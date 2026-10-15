@@ -579,6 +579,9 @@ async function onInner(s, o) {
       bumpUnread();
       break;
     }
+    case 'edit':
+      applyEdit({ id: o.eid, target: o.id, a: authorOf(s, o), body: o.body, ts: o.ts });
+      break;
     case 'file':
       await onFileMeta(s, o);
       break;
@@ -954,6 +957,9 @@ function clearMessages() {
   outbox.length = 0;
   $('messages').textContent = '';
   mgCache = null;
+  mgEdits.clear();
+  pendingEdits.clear();
+  if (editing) cancelEdit();
   $('empty-state').hidden = false;
 }
 
@@ -1130,7 +1136,101 @@ function setReplyTo(entry) {
 
 function clearReply() {
   replyTo = null;
+  if (!editing) $('reply-bar').hidden = true;
+}
+
+// ---------- editing ----------
+// Only the author edits, only plain text. The edit travels like a reaction
+// (live to whoever is online, stored encrypted for everyone else) and the
+// earlier wording stays visible under the message, in another colour.
+const pendingEdits = new Map(); // target id -> edits that arrived before the message
+let editing = null; // the entry being edited from the composer
+
+const canEdit = (entry) => entry.dir === 'out' && entry.kind === 'text' && !entry.preview && typeof entry.body === 'string';
+
+function startEdit(entry) {
+  clearReply();
+  editing = entry;
+  const bar = $('reply-bar');
+  bar.textContent = '';
+  bar.classList.add('editing');
+  const box = el('div', 'reply-info');
+  box.append(el('div', 'reply-who', 'ویرایش پیام'), el('div', 'reply-snip', entry.body.slice(0, 80)));
+  const x = el('button', 'btn-icon sm');
+  x.type = 'button';
+  x.setAttribute('aria-label', 'لغو ویرایش');
+  x.append(icon('x'));
+  x.onclick = cancelEdit;
+  bar.append(icon('edit'), box, x);
+  bar.hidden = false;
+  const input = $('input');
+  input.value = entry.body;
+  autoGrow();
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+}
+
+function cancelEdit() {
+  if (!editing) return;
+  editing = null;
+  $('reply-bar').classList.remove('editing');
   $('reply-bar').hidden = true;
+  $('input').value = '';
+  autoGrow();
+}
+
+function sendEdit() {
+  const entry = editing;
+  const body = $('input').value.trim().slice(0, 4000);
+  cancelEdit();
+  if (!entry || !messages.has(entry.id) || !body || body === entry.body) return;
+  const ev = { id: b64u(rand(12)), target: entry.id, a: myDev, body, ts: Date.now() };
+  applyEdit(ev);
+  if (anySecure()) post({ k: 'edit', id: entry.id, eid: ev.id, body, ts: ev.ts, a: myDev }).catch(() => {});
+  storeEvent({ k: 'edit', ...ev }).catch(() => toast('ذخیره‌ی ویرایش روی سرور انجام نشد'));
+}
+
+function applyEdit(ev) {
+  if (typeof ev.id !== 'string' || typeof ev.target !== 'string' || typeof ev.body !== 'string' || !ev.body.trim()) return;
+  const entry = messages.get(ev.target);
+  if (!entry) {
+    const list = pendingEdits.get(ev.target) || [];
+    if (list.length < 20) list.push(ev);
+    pendingEdits.set(ev.target, list);
+    return;
+  }
+  const author = entry.dir === 'out' ? myDev : entry.from;
+  if (entry.kind !== 'text' || entry.preview || ev.a !== author) return; // only the author, only text
+  entry.editIds ??= new Set();
+  if (entry.editIds.has(ev.id)) return; // the live copy and the stored copy of one edit
+  entry.editIds.add(ev.id);
+  entry.versions ??= [{ body: entry.body, ts: entry.ts }];
+  entry.versions.push({ body: ev.body.slice(0, 4000), ts: Number(ev.ts) || Date.now() });
+  entry.versions.sort((x, y) => x.ts - y.ts); // edits may arrive out of order
+  entry.body = entry.versions[entry.versions.length - 1].body;
+  entry.snippet = entry.body.slice(0, 40);
+  renderEdited(entry);
+  scheduleChatRow();
+}
+
+function renderEdited(entry) {
+  const c = entry.content;
+  c.querySelector(':scope > .body')?.remove();
+  c.querySelector(':scope > .edit-prev')?.remove();
+  const big = isEmojiOnly(entry.body);
+  entry.el.classList.toggle('big-emoji', big);
+  c.append(el('div', big ? 'body big' : 'body', entry.body));
+  const older = entry.versions.slice(0, -1).reverse().slice(0, 5); // newest earlier wording first
+  const prevBox = el('div', 'edit-prev');
+  prevBox.append(el('div', 'edit-prev-label', older.length > 1 ? 'متن‌های قبل از ویرایش' : 'قبل از ویرایش'));
+  for (const v of older) prevBox.append(el('div', 'edit-prev-text', v.body));
+  c.append(prevBox);
+  let tag = entry.el.querySelector('.meta .edited');
+  if (!tag) {
+    tag = el('span', 'edited', 'ویرایش‌شده');
+    entry.el.querySelector('.meta .time')?.before(tag);
+  }
+  tag.title = new Date(entry.versions[entry.versions.length - 1].ts).toLocaleString('fa-IR', { dateStyle: 'medium', timeStyle: 'short' });
 }
 
 function sanitizeReply(r) {
@@ -1155,9 +1255,10 @@ function quoteBlock(r) {
 }
 
 function renderText(msg, dir) {
-  const prev = msg.preview && !insertAnchor ? lastRealItem() : null;
+  const prev = msg.preview ? lastRealItem(insertAnchor) : null; // also while older history goes in above
   const entry = createEntry({ from: msg.from, id: msg.id, ts: msg.ts, dir, ttl: msg.ttl, kind: msg.preview ? 'ig' : 'text', snippet: msg.body.slice(0, 40) });
   entry.preview = msg.preview || null;
+  entry.body = msg.body;
   const body = msg.body;
   if (msg.reply) { entry.quote = msg.reply; entry.content.append(quoteBlock(msg.reply)); } // entry.reply holds reaction replies
   if (msg.preview) {
@@ -1185,10 +1286,40 @@ function renderText(msg, dir) {
 // merge into one stacked card instead of filling the chat.
 const stacks = new Set();
 
-function lastRealItem() {
-  let n = $('messages').lastElementChild;
+// The last message before `before` (or at the end), skipping reaction lines
+// and notices, which don't break a run of posts.
+function lastRealItem(before = null) {
+  let n = before ? before.previousElementSibling : $('messages').lastElementChild;
   while (n && (n.classList.contains('act-run') || n.classList.contains('notice'))) n = n.previousElementSibling;
   return n;
+}
+
+// After an older history page goes in above the chat, the newest post of that
+// page and the oldest post already shown may belong to one run: merge them.
+function mergeIgSeam(anchor) {
+  let b = anchor;
+  while (b && (b.classList.contains('act-run') || b.classList.contains('notice'))) b = b.nextElementSibling;
+  const a = b && lastRealItem(b);
+  const info = (n) => {
+    if (n?._stack) return { stack: n._stack, members: n._stack.members, dir: n._stack.dir };
+    const e = n?._igEntry;
+    return e && !e.stack && messages.has(e.id) ? { members: [e], dir: e.dir } : null;
+  };
+  const A = info(a), B = info(b);
+  if (!A || !B || A.dir !== B.dir) return;
+  const target = B.stack || A.stack || makeStack(B.dir);
+  const all = [...A.members, ...B.members];
+  if (target.el !== b) b.replaceWith(target.el);
+  if (target.el !== a) { a.remove(); if (A.stack) { stacks.delete(A.stack); readObserver.unobserve(a); } }
+  for (const m of all) {
+    if (m.el.isConnected) m.el.remove();
+    readObserver.unobserve(m.el);
+    visibleUnread.delete(m);
+    m.stack = target;
+  }
+  target.members = all;
+  readObserver.observe(target.el);
+  renderStack(target);
 }
 
 function placeIgEntry(entry, prev) {
@@ -1227,7 +1358,7 @@ function addToStack(stack, entry, moveToEnd) {
   stack.members.push(entry);
   entry.stack = stack;
   entry.el.remove();
-  if (moveToEnd) {
+  if (moveToEnd && !insertAnchor) { // history being inserted: the stack is already in place
     const list = $('messages');
     const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 160;
     list.append(stack.el);
@@ -1495,6 +1626,7 @@ async function shrinkImage(src, max, quality) {
 }
 
 async function sendText() {
+  if (editing) { sendEdit(); return; }
   const input = $('input');
   const body = input.value.trim();
   if (!body) return;
@@ -1547,6 +1679,15 @@ function openReactBar(entry) {
   more.append(icon('plus'));
   more.onclick = (ev) => { ev.stopPropagation(); bar.hidden = true; openEmojiPicker((e) => setReaction(entry, entry.react.me === e ? null : e)); };
   bar.append(more);
+  if (canEdit(entry)) {
+    const eb = el('button', 'edit-btn');
+    eb.type = 'button';
+    eb.setAttribute('aria-label', 'ویرایش');
+    eb.title = 'ویرایش';
+    eb.append(icon('edit'));
+    eb.onclick = (ev) => { ev.stopPropagation(); bar.hidden = true; startEdit(entry); };
+    bar.append(eb);
+  }
   const rb = el('button', 'reply-btn');
   rb.type = 'button';
   rb.setAttribute('aria-label', 'پاسخ');
@@ -2787,10 +2928,13 @@ function afterHistoryEntry(entry, ev, dir) {
   }
   const pend = pendingReacts.get(entry.id);
   if (pend) { pendingReacts.delete(entry.id); for (const r of pend) applyReaction(r, true); }
+  const edits = pendingEdits.get(entry.id);
+  if (edits) { pendingEdits.delete(entry.id); for (const e of edits) applyEdit(e); }
 }
 
 function applyHistory(ev) {
   if (ev.k === 'react') { applyReaction(ev, true); return; }
+  if (ev.k === 'edit') { applyEdit(ev); return; }
   if (ev.k === 'seen') { applySeen(ev); return; }
   if (messages.has(ev.id) || seen.has(ev.id)) return;
   if (ev.k === 'text') {
@@ -2886,8 +3030,9 @@ async function loadHistory(initial, limit = 120) {
     const prevTop = list.scrollTop;
     insertAnchor = [...list.children].find((c) => c.id !== 'load-older') || null;
     try {
-      for (const ev of events) if (ev.k !== 'react' && ev.k !== 'seen') applyHistory(ev);
-      for (const ev of events) if (ev.k === 'react' || ev.k === 'seen') applyHistory(ev);
+      for (const ev of events) if (ev.k !== 'react' && ev.k !== 'seen' && ev.k !== 'edit') applyHistory(ev);
+      for (const ev of events) if (ev.k === 'react' || ev.k === 'seen' || ev.k === 'edit') applyHistory(ev);
+      mergeIgSeam(insertAnchor);
     } finally {
       insertAnchor = null;
     }
@@ -2926,6 +3071,12 @@ let mgGen = 0;
 // Decrypted log kept for the life of the tab, so reopening the manager paints at
 // once and only asks the server for what was written since.
 let mgCache = null; // { key, items, newest, complete }
+const mgEdits = new Map(); // message id -> latest edit { body, ts }
+function mgNoteEdit(ev) {
+  if (ev?.k !== 'edit' || typeof ev.target !== 'string' || typeof ev.body !== 'string') return;
+  const cur = mgEdits.get(ev.target);
+  if (!cur || (ev.ts || 0) > cur.ts) mgEdits.set(ev.target, { body: ev.body, ts: ev.ts || 0 });
+}
 const mgCacheKey = () => (room.histKey ? room.id : '');
 function mgForget(ids) {
   if (!mgCache) return;
@@ -3035,6 +3186,7 @@ async function fetchAllContent(onBatch, after = 0) {
     const before = items[items.length - 1].ts;
     pending = data.more && items.length === data.items.length ? fetchLogPage(before, after) : null;
     const decoded = await mapLimit(items, 48, openEvent);
+    for (const ev of decoded) mgNoteEdit(ev);
     const batch = decoded.filter((ev) => ev && (ev.k === 'text' || (ev.k === 'file' && validFileEvent(ev))));
     if (batch.length) onBatch?.(batch);
     if (!pending) return true;
@@ -3060,10 +3212,12 @@ function renderUsage(u) {
 const foldDigits = (s) => s.replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/[٠-٩]/g, (d) => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
 const MG_FOLD = (s) => foldDigits(String(s).toLowerCase()).replace(/[\u200c\u200d]/g, '').replace(/[يى]/g, 'ی').replace(/ك/g, 'ک');
 
-const mgTitle = (ev, kind) => kind === 'text' ? ev.body : kind === 'ig' ? (ev.preview?.title || 'پست اینستاگرام') : String(ev.name || MG_LABEL[kind]);
+const mgTitle = (ev, kind) => kind === 'text' ? (mgEdits.get(ev.id)?.body ?? ev.body) : kind === 'ig' ? (ev.preview?.title || 'پست اینستاگرام') : String(ev.name || MG_LABEL[kind]);
 const mgWho = (ev) => (ev.a === myDev ? 'شما' : (knownNames.get(ev.a) || ev.an || 'مخاطب'));
 const mgWhen = (ev) => new Date(ev.ts).toLocaleString('fa-IR', { dateStyle: 'medium', timeStyle: 'short' });
 function mgSearchText(ev) {
+  const edited = mgEdits.get(ev.id)?.body;
+  if (ev._mgqEdited !== edited) { ev._mgqEdited = edited; ev._mgq = undefined; }
   if (ev._mgq === undefined) ev._mgq = MG_FOLD(`${mgTitle(ev, MG_KIND(ev))}\n${mgWho(ev)}\n${MG_LABEL[MG_KIND(ev)]}\n${mgWhen(ev)}`);
   return ev._mgq;
 }
@@ -4088,7 +4242,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-16.4';
+const APP_VERSION = '2026-10-16.5';
 let updateOffered = false;
 async function checkUpdate() {
   if (updateOffered || document.hidden) return;
@@ -5141,6 +5295,7 @@ function bindUi() {
   });
 
   $('composer').onsubmit = (e) => { e.preventDefault(); sendText(); };
+  $('input').addEventListener('keydown', (e) => { if (e.key === 'Escape' && editing) { e.preventDefault(); cancelEdit(); } });
   $('input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && matchMedia('(pointer: fine)').matches) {
       e.preventDefault();

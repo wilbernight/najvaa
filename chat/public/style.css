@@ -956,3 +956,23 @@ img.emo { display: inline-block; width: 1.3em; height: 1.3em; vertical-align: -0
 /* picking a reaction: float the picker in the middle of the chat */
 .emoji-panel.pick-mode { position: fixed; z-index: 40; inset: auto; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(420px, calc(100vw - 32px)); height: min(440px, 70dvh); box-shadow: var(--shadow-lg); animation: fade .15s; }
 
+/* ---------- edited messages ---------- */
+/* The earlier wording sits under the message in its own colour (amber), so
+   it can't be mistaken for the current text. */
+.edit-prev { margin-top: 6px; padding: 3px 9px 4px; border-inline-start: 2px solid currentColor; border-radius: 4px; font-size: 12.5px; line-height: 1.6; color: #b86e00; background: rgba(245,158,11,.1); }
+.msg.out .edit-prev { color: #ffd88a; background: rgba(0,0,0,.14); }
+@media (prefers-color-scheme: dark) { .msg.in .edit-prev { color: #f5b545; } }
+.edit-prev-label { font-size: 11px; font-weight: 700; opacity: .85; }
+.edit-prev-text { white-space: pre-wrap; overflow-wrap: anywhere; text-decoration: line-through; text-decoration-thickness: 1px; text-decoration-color: color-mix(in srgb, currentColor 55%, transparent); }
+.edit-prev-text + .edit-prev-text { margin-top: 3px; padding-top: 3px; border-top: 1px dashed color-mix(in srgb, currentColor 35%, transparent); }
+.msg.big-emoji .edit-prev { color: var(--text-2); background: var(--surface-2); }
+.meta .edited { font-weight: 600; direction: rtl; }
+body.veil .msg .edit-prev-text { filter: blur(5px); transition: filter .12s; }
+body.veil .msg.peek .edit-prev-text, body.veil .msg.reveal .edit-prev-text { filter: none; }
+@media (hover: hover) { body.veil .msg:hover .edit-prev-text { filter: none; } }
+.react-bar .edit-btn { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; color: var(--text-2); flex: none; }
+.react-bar .edit-btn:hover { color: var(--brand-1); }
+.react-bar .edit-btn .i { width: 19px; height: 19px; }
+.reply-bar.editing { border-inline-start-color: #f59e0b; }
+.reply-bar.editing > .i, .reply-bar.editing .reply-who { color: #f59e0b; transform: none; }
+
