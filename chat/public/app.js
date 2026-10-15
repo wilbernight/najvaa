@@ -604,7 +604,7 @@ async function onInner(s, o) {
       notice(ttl ? `${who()} زمان حذف را روی «${ttlLabel(ttl)} پس از خواندن» گذاشت` : `${who()} حذف خودکار را خاموش کرد`);
       break;
     case 'del':
-      if (Array.isArray(o.ids)) for (const id of o.ids.slice(0, 2000)) { const m = messages.get(id); if (m) removeEntry(m); }
+      if (Array.isArray(o.ids)) { for (const id of o.ids.slice(0, 2000)) { const m = messages.get(id); if (m) removeEntry(m); } mgForget(o.ids.slice(0, 2000)); }
       break;
     case 'clear':
       clearMessages();
@@ -937,6 +937,7 @@ function clearMessages() {
   for (const entry of [...messages.values()]) removeEntry(entry);
   outbox.length = 0;
   $('messages').textContent = '';
+  mgCache = null;
   $('empty-state').hidden = false;
 }
 
@@ -2700,6 +2701,7 @@ async function deleteForAll(ids) {
   if (!r || !r.ok) { toast('حذف از سرور انجام نشد'); return false; }
   if (anySecure()) post({ k: 'del', ids }).catch(() => {});
   for (const id of ids) { const m = messages.get(id); if (m) removeEntry(m); }
+  mgForget(ids);
   return true;
 }
 
@@ -2826,12 +2828,12 @@ async function downloadRemote(entry) {
   }
 }
 
-async function loadHistory(initial) {
+async function loadHistory(initial, limit = 120) {
   if (histLoading || (!initial && !histMore) || !room.histKey) return;
   histLoading = true;
   const list = $('messages');
   try {
-    const q = new URLSearchParams({ limit: '120' });
+    const q = new URLSearchParams({ limit: String(limit) });
     if (!initial && histBefore) q.set('before', String(histBefore));
     const r = await storeFetch('/h/log?' + q);
     if (r.status === 403) {
@@ -2887,6 +2889,16 @@ let mgQuery = '';
 let mgBusy = false;
 let mgShown = 200;
 let mgGen = 0;
+// Decrypted log kept for the life of the tab, so reopening the manager paints at
+// once and only asks the server for what was written since.
+let mgCache = null; // { key, items, newest, complete }
+const mgCacheKey = () => (room.histKey ? room.id : '');
+function mgForget(ids) {
+  if (!mgCache) return;
+  const drop = new Set(ids);
+  mgCache.items = mgCache.items.filter((ev) => !drop.has(ev.id));
+  if (!$('manage-modal').hidden) { mgItems = mgItems.filter((ev) => !drop.has(ev.id)); renderManager(); }
+}
 const MG_RENDER = 200; // rows painted at a time; older ones sit behind "show older"
 const mgSelected = new Set();
 const MG_KIND = (ev) => (ev.k === 'text' ? (ev.preview ? 'ig' : 'text') : ev.kind === 'gif' ? 'image' : ev.kind === 'voice' && AUDIO_RE.test(ev.mime || '') ? 'voice' : kindOf(ev.mime || ''));
@@ -2907,12 +2919,36 @@ async function openManager() {
   $('mg-list').textContent = '';
   $('mg-empty').hidden = true;
   $('mg-sub').textContent = 'در حال خواندن تاریخچه از سرور…';
+  const key = mgCacheKey();
+  const cached = mgCache && mgCache.key === key && mgCache.complete ? mgCache : null;
+  if (cached) mgItems = cached.items.slice();
   renderManager();
   const usageP = fetchUsage();
   renderUsage(await usageP);
-  // Paint after every page instead of waiting for the whole log.
-  await fetchAllContent((batch) => { if (gen !== mgGen) return; mgItems.push(...batch); renderManager(); });
   if (gen !== mgGen) return;
+  if (cached) {
+    // Only what arrived since the last open; newest first, ahead of the rest.
+    const fresh = [];
+    await fetchAllContent((batch) => { if (gen === mgGen) fresh.push(...batch); }, cached.newest);
+    if (gen !== mgGen) return;
+    const have = new Set(cached.items.map((ev) => ev.id));
+    const add = fresh.filter((ev) => !have.has(ev.id));
+    cached.items = add.concat(cached.items);
+    if (add.length) cached.newest = Math.max(cached.newest, ...add.map((ev) => ev.ts));
+    mgItems = cached.items.slice();
+  } else {
+    const run = { key, items: [], newest: 0, complete: false };
+    mgCache = run;
+    // Paint after every page instead of waiting for the whole log.
+    const ok = await fetchAllContent((batch) => {
+      if (gen !== mgGen) return;
+      mgItems.push(...batch);
+      run.items.push(...batch);
+      if (!run.newest) run.newest = batch[0].ts;
+    });
+    if (gen !== mgGen) return;
+    run.complete = ok;
+  }
   mgBusy = false;
   renderManager();
   renderUsage(await usageP);
@@ -2937,12 +2973,13 @@ async function mapLimit(items, limit, fn) {
   return out;
 }
 
-const MG_PAGE = 500;      // the relay's largest page
-const MG_MAX_PAGES = 400; // safety valve only: 200k entries is past any real room
+const MG_PAGE = 1000;     // the relay's largest page
+const MG_MAX_PAGES = 400; // safety valve only: 400k entries is past any real room
 
-function fetchLogPage(before) {
+function fetchLogPage(before, after) {
   const q = new URLSearchParams({ limit: String(MG_PAGE) });
   if (before) q.set('before', String(before));
+  if (after) q.set('after', String(after));
   return storeFetch('/h/log?' + q, { timeout: 30000 }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
 }
 
@@ -2950,18 +2987,24 @@ function fetchLogPage(before) {
 // `onBatch` so the manager can paint as it goes. The loop follows the server's
 // `more` flag all the way down (no page cap), so messages from months back are
 // read too, and the next page is fetched while the current one is decrypted.
-async function fetchAllContent(onBatch) {
-  let pending = fetchLogPage(null);
+// With `after`, only entries newer than that timestamp are read. Resolves true
+// when the walk reached the end of the log, false if a page failed.
+async function fetchAllContent(onBatch, after = 0) {
+  let pending = fetchLogPage(null, after);
   for (let page = 0; page < MG_MAX_PAGES; page++) {
     const data = await pending;
-    if (!data || !data.items?.length) break;
-    const before = data.items[data.items.length - 1].ts;
-    pending = data.more ? fetchLogPage(before) : null;
-    const decoded = await mapLimit(data.items, 32, openEvent);
+    if (!data) return false;
+    // An older relay ignores `after`: stop once its pages reach known ground.
+    const items = after ? data.items.filter((it) => it.ts > after) : data.items;
+    if (!items.length) return true;
+    const before = items[items.length - 1].ts;
+    pending = data.more && items.length === data.items.length ? fetchLogPage(before, after) : null;
+    const decoded = await mapLimit(items, 48, openEvent);
     const batch = decoded.filter((ev) => ev && (ev.k === 'text' || (ev.k === 'file' && validFileEvent(ev))));
     if (batch.length) onBatch?.(batch);
-    if (!pending) break;
+    if (!pending) return true;
   }
+  return true;
 }
 
 function fmtBytes(n) {
@@ -2991,7 +3034,9 @@ function mgSearchText(ev) {
 }
 function mgRows() {
   const terms = mgQuery.trim() ? MG_FOLD(mgQuery.trim()).split(/\s+/) : null;
+  const now = Date.now();
   return mgItems.filter((ev) => {
+    if (ev.exp && ev.exp <= now) return false;
     if (mgFilter !== 'all' && MG_KIND(ev) !== mgFilter) return false;
     if (!terms) return true;
     const hay = mgSearchText(ev);
@@ -3057,7 +3102,7 @@ async function goToMessage(id) {
     toast('در حال پیدا کردن پیام…');
     for (let i = 0; i < 300 && !messages.has(id) && histMore; i++) {
       while (histLoading) await sleep(50);
-      await loadHistory(false);
+      await loadHistory(false, 500);
     }
   }
   const m = messages.get(id);
@@ -4008,7 +4053,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-16.1';
+const APP_VERSION = '2026-10-16.2';
 let updateOffered = false;
 async function checkUpdate() {
   if (updateOffered || document.hidden) return;

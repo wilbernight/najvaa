@@ -443,16 +443,25 @@ async function handleStore(req, res) {
     // GET /h/log?before=&limit=
     if (req.method === 'GET' && parts[1] === 'log') {
       const before = Number(url.searchParams.get('before')) || Infinity;
-      const limit = Math.min(500, Math.max(1, Number(url.searchParams.get('limit')) || 100));
+      const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 100));
+      const after = Number(url.searchParams.get('after')) || 0;
       const now = Date.now();
-      const list = (await listEntries(dir)).filter((e) => e.ts < before && !(e.exp && e.exp <= now)).sort((a, b) => b.ts - a.ts);
+      const list = (await listEntries(dir)).filter((e) => e.ts < before && e.ts > after && !(e.exp && e.exp <= now)).sort((a, b) => b.ts - a.ts);
+      // Read the page's files a few dozen at a time rather than one by one:
+      // on a deep page that was most of the response time.
+      const page = list.slice(0, limit);
+      const raws = new Array(page.length);
+      let next = 0;
+      const worker = async () => { while (next < page.length) { const i = next++; raws[i] = await fsp.readFile(path.join(dir, 'log', page[i].name), 'utf8').catch(() => null); } };
+      await Promise.all(Array.from({ length: Math.min(32, page.length) }, worker));
       const items = [];
-      for (const e of list.slice(0, limit)) {
-        const raw = await fsp.readFile(path.join(dir, 'log', e.name), 'utf8').catch(() => null);
-        if (!raw) continue;
-        const { iv, ct } = JSON.parse(raw);
-        items.push({ id: e.id, ts: e.ts, exp: e.exp, blob: e.blob, iv, ct });
-      }
+      page.forEach((e, i) => {
+        if (!raws[i]) return;
+        try {
+          const { iv, ct } = JSON.parse(raws[i]);
+          items.push({ id: e.id, ts: e.ts, exp: e.exp, blob: e.blob, iv, ct });
+        } catch {}
+      });
       return json(res, 200, { items, more: list.length > limit });
     }
     // POST /h/exp {ids, exp}: schedule deletion (only ever moves earlier)
