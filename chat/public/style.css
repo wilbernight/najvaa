@@ -139,7 +139,10 @@ button:disabled { opacity: .35; cursor: not-allowed; }
 
 /* ---------- chat layout ---------- */
 #chat { height: 100%; height: 100dvh; display: flex; flex-direction: column; max-width: 900px; margin: 0 auto; position: relative; background: var(--bg); }
-@media (min-width: 900px) { #chat { border-inline: 1px solid var(--line); } }
+@media (min-width: 900px) and (max-width: 1023.98px) { #chat { border-inline: 1px solid var(--line); } }
+/* The conversation column. On the phone it is the only pane; on the laptop it
+   sits next to the room rail. */
+.conv { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .topbar {
   display: flex; align-items: center; justify-content: space-between; gap: 10px; z-index: 6;
   padding: 10px 12px; padding-top: max(10px, env(safe-area-inset-top));
@@ -665,6 +668,14 @@ body.veil #input:not(:focus) { filter: blur(4px); }
 .mg-track i { display: block; height: 100%; width: 0; background: var(--brand); border-radius: inherit; transition: width .4s var(--ease); }
 .mg-note { display: flex; gap: 6px; font-size: 11.5px; color: var(--text-3); margin: 0; }
 .mg-note .i { width: 14px; height: 14px; flex: none; margin-top: 2px; }
+.mg-search { display: flex; align-items: center; gap: 6px; height: 46px; padding: 0 8px 0 12px; margin-bottom: 10px; background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 14px; transition: border-color .2s, box-shadow .2s; }
+.mg-search:focus-within { border-color: var(--brand-1); box-shadow: 0 0 0 4px var(--brand-soft); }
+.mg-search > .i { width: 18px; height: 18px; color: var(--text-3); flex: none; }
+.mg-search input { flex: 1; min-width: 0; border: 0; background: none; outline: none; height: 100%; font-size: 14.5px; }
+.mg-search input::placeholder { color: var(--text-3); }
+.mg-search input::-webkit-search-cancel-button { display: none; }
+.mg-more { justify-content: center; cursor: default; }
+.mg-more:hover { background: none !important; }
 .mg-seg { overflow-x: auto; scrollbar-width: none; }
 .mg-seg button { flex: none; padding: 0 12px; }
 .mg-tools { display: flex; justify-content: space-between; align-items: center; font-size: 12.5px; color: var(--text-2); margin: 0 4px 6px; min-height: 22px; }
@@ -779,3 +790,98 @@ body.veil .msg.peek .quote-text, body.veil .msg.reveal .quote-text { filter: non
 .to-bottom .i { width: 20px; height: 20px; transform: rotate(-90deg); }
 .to-bottom-n { position: absolute; top: -6px; inset-inline-end: -4px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; background: var(--brand-1); color: #fff; font-size: 11px; line-height: 20px; text-align: center; }
 .to-bottom[hidden], .to-bottom-n[hidden] { display: none; }
+
+/* ============================================================
+   Responsive: phone vs laptop
+   Phone  — one column. The room panel only exists inside the ⋯ popover,
+            so the rail contributes no box at all (`display: contents`).
+   Laptop — a real two-pane layout: a persistent room/settings rail beside
+            the conversation, the way desktop messengers are laid out.
+   ============================================================ */
+.rail { display: contents; }
+.rail-head, .rail-room, .rail-foot { display: none; }
+
+@media (min-width: 1024px) {
+  /* ---------- conversation pane ---------- */
+  #chat {
+    max-width: none; margin: 0; border: 0;
+    display: grid; grid-template-columns: 348px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);
+    background: var(--bg-2);
+  }
+  .conv { background: var(--bg); }
+
+  .topbar { padding: 14px 22px; }
+  .banner { margin: 12px 22px 0; }
+  #messages { padding: 22px 26px 12px; }
+  .msg { max-width: min(64%, 620px); }
+  #typing { margin: 0 26px 6px; }
+  .composer-wrap { padding: 12px 22px 18px; }
+  .composer, .mini-player { max-width: 940px; margin-inline: auto; }
+  .mini-player { margin-bottom: 8px; }
+  .emoji-panel { inset-inline: 22px; max-width: 940px; margin-inline: auto; }
+  .ttl-pop { top: 64px; inset-inline-end: 16px; }
+  #menu-btn, .menu-code { display: none; }
+  .to-bottom { inset-inline-end: 30px; bottom: 18px; }
+  .empty h2 { font-size: 19px; }
+  .empty p { max-width: 460px; }
+  .drop-zone { inset-inline-start: 348px; }
+
+  /* ---------- room / settings rail ---------- */
+  .rail {
+    display: flex; flex-direction: column; min-height: 0;
+    padding: 16px 12px 12px;
+    background: var(--bg-2); border-inline-end: 1px solid var(--line);
+  }
+  .rail-head { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; }
+  .rail-head .brand-mark { width: 36px; height: 36px; border-radius: 11px; }
+  .rail-head .brand-name { font-size: 19px; }
+  .rail-room { display: block; margin: 0 2px 16px; padding: 14px; border-radius: 18px; background: var(--surface); border: 1px solid var(--line-2); text-align: center; }
+  .rail-room-label { display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; color: var(--text-3); margin-bottom: 8px; }
+  .rail-room-label .i { width: 14px; height: 14px; }
+  .rail-room-code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 27px; font-weight: 800; letter-spacing: 4px; margin-bottom: 14px; text-align: center; }
+  .rail-foot { display: flex; gap: 8px; align-items: flex-start; font-size: 11.5px; line-height: 1.7; color: var(--text-3); margin: 14px 6px 4px; }
+  .rail-foot .i { width: 14px; height: 14px; flex: none; margin-top: 3px; }
+
+  /* the ⋯ popover becomes a permanent settings list */
+  #menu[hidden] { display: flex !important; }
+  #menu {
+    position: static; inset: auto; width: auto; min-width: 0; flex: 1 1 auto; min-height: 0;
+    overflow-y: auto; overscroll-behavior: contain;
+    background: none; border: 0; box-shadow: none; padding: 0; animation: none;
+  }
+  #menu button { padding: 11px 12px; border-radius: 12px; }
+  #menu hr { margin: 6px 10px; }
+
+  /* ---------- landing: hero beside the entry card ---------- */
+  .landing { padding: 56px 40px; align-items: center; }
+  .landing-inner {
+    max-width: 1080px; display: grid; gap: 0 60px; align-items: center;
+    grid-template-columns: minmax(0, 1fr) 440px;
+    grid-template-areas: "brand panel" "title panel" "sub panel" "feats panel";
+  }
+  .landing-inner .brand { grid-area: brand; margin-bottom: 26px; }
+  .landing-inner .hero-title { grid-area: title; font-size: 46px; }
+  .landing-inner .hero-sub { grid-area: sub; max-width: 48ch; font-size: 16px; margin-bottom: 34px; }
+  .landing-inner .step { grid-area: panel; align-self: center; }
+  .landing-inner .features { grid-area: feats; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 0; }
+  .landing-inner .feature { flex-direction: column; align-items: flex-start; gap: 10px; padding: 16px; }
+
+  /* ---------- dialogs, lock screen ---------- */
+  .modal-card { max-width: 440px; }
+  .manage-card { max-width: 560px; }
+  .lock-box { max-width: 400px; }
+
+  /* ---------- tidy scrollbars (pointer devices only) ---------- */
+  #messages, #menu, .rail, .modal-card, .emoji-panel { scrollbar-width: thin; scrollbar-color: var(--surface-3) transparent; }
+  #messages::-webkit-scrollbar, #menu::-webkit-scrollbar, .modal-card::-webkit-scrollbar, .emoji-panel::-webkit-scrollbar { width: 10px; height: 10px; }
+  #messages::-webkit-scrollbar-thumb, #menu::-webkit-scrollbar-thumb, .modal-card::-webkit-scrollbar-thumb, .emoji-panel::-webkit-scrollbar-thumb { background: var(--surface-3); border: 3px solid transparent; border-radius: 99px; background-clip: content-box; }
+  #messages::-webkit-scrollbar-thumb:hover, #menu::-webkit-scrollbar-thumb:hover { background: var(--text-3); background-clip: content-box; }
+}
+
+/* ---------- phone: touch-sized controls ---------- */
+@media (max-width: 1023.98px) and (pointer: coarse) {
+  .top-actions .btn-icon { width: 44px; height: 44px; }
+  .popover button { padding: 13px 12px; }
+  .sheet-btn { height: 54px; }
+  .lib-list li, .mg-list li { padding-block: 11px; }
+}

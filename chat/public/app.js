@@ -226,7 +226,7 @@ async function openRoom(code, pass, creating) {
   room.creating = creating;
   room.pendingPass = creating ? pass : null; // only until the code is confirmed free
   if (!myName) myName = defaultName();
-  for (const id of ['room-tag', 'share-code', 'lock-code', 'menu-code']) $(id).textContent = fmtCode(code);
+  for (const id of ['room-tag', 'share-code', 'lock-code', 'menu-code', 'rail-code']) $(id).textContent = fmtCode(code);
   $('sms-btn').href = `sms:?&body=${encodeURIComponent(`کد اتاق نجوا: ${code}\nhttps://${location.host}/#${code}`)}`;
   show('chat');
   connect();
@@ -2831,7 +2831,7 @@ async function loadHistory(initial) {
   histLoading = true;
   const list = $('messages');
   try {
-    const q = new URLSearchParams({ limit: '80' });
+    const q = new URLSearchParams({ limit: '120' });
     if (!initial && histBefore) q.set('before', String(histBefore));
     const r = await storeFetch('/h/log?' + q);
     if (r.status === 403) {
@@ -2844,8 +2844,7 @@ async function loadHistory(initial) {
     const { items, more } = await r.json();
     histMore = !!more;
     if (items.length) histBefore = items[items.length - 1].ts;
-    const events = [];
-    for (const it of items) { const ev = await openEvent(it); if (ev) events.push(ev); }
+    const events = (await mapLimit(items, 24, openEvent)).filter(Boolean);
     events.reverse(); // oldest first
     const prevHeight = list.scrollHeight;
     const prevTop = list.scrollTop;
@@ -2884,6 +2883,11 @@ function updateOlderButton() {
 // ---------- content manager ----------
 let mgItems = [];
 let mgFilter = 'all';
+let mgQuery = '';
+let mgBusy = false;
+let mgShown = 200;
+let mgGen = 0;
+const MG_RENDER = 200; // rows painted at a time; older ones sit behind "show older"
 const mgSelected = new Set();
 const MG_KIND = (ev) => (ev.k === 'text' ? (ev.preview ? 'ig' : 'text') : ev.kind === 'gif' ? 'image' : ev.kind === 'voice' && AUDIO_RE.test(ev.mime || '') ? 'voice' : kindOf(ev.mime || ''));
 const MG_LABEL = { text: 'متن', ig: 'اینستاگرام', image: 'عکس', video: 'ویدیو', audio: 'موزیک', voice: 'ویس', file: 'فایل' };
@@ -2892,15 +2896,26 @@ const MG_ICON = { text: 'message', ig: 'insta', image: 'image', video: 'video', 
 async function openManager() {
   closePanels();
   $('manage-modal').hidden = false;
+  const gen = ++mgGen; // reopening while a load is in flight must not mix the two
   mgSelected.clear();
   mgItems = [];
+  mgQuery = '';
+  mgBusy = true;
+  mgShown = MG_RENDER;
+  $('mg-search').value = '';
+  $('mg-search-clear').hidden = true;
   $('mg-list').textContent = '';
-  $('mg-sub').textContent = 'در حال بارگذاری از سرور…';
   $('mg-empty').hidden = true;
-  const [usage, items] = await Promise.all([fetchUsage(), fetchAllContent()]);
-  mgItems = items;
-  renderUsage(usage);
+  $('mg-sub').textContent = 'در حال خواندن تاریخچه از سرور…';
   renderManager();
+  const usageP = fetchUsage();
+  renderUsage(await usageP);
+  // Paint after every page instead of waiting for the whole log.
+  await fetchAllContent((batch) => { if (gen !== mgGen) return; mgItems.push(...batch); renderManager(); });
+  if (gen !== mgGen) return;
+  mgBusy = false;
+  renderManager();
+  renderUsage(await usageP);
 }
 
 async function fetchUsage() {
@@ -2912,28 +2927,41 @@ async function fetchUsage() {
   }
 }
 
-async function fetchAllContent() {
-  const out = [];
-  let before = null;
-  for (let page = 0; page < 40; page++) {
-    const q = new URLSearchParams({ limit: '500' });
-    if (before) q.set('before', String(before));
-    let data;
-    try {
-      const r = await storeFetch('/h/log?' + q);
-      if (!r.ok) break;
-      data = await r.json();
-    } catch {
-      break;
-    }
-    for (const it of data.items) {
-      const ev = await openEvent(it);
-      if (ev && (ev.k === 'text' || (ev.k === 'file' && validFileEvent(ev)))) out.push(ev);
-    }
-    if (!data.more || !data.items.length) break;
-    before = data.items[data.items.length - 1].ts;
-  }
+// `subtle.decrypt` is async, so decoding a page one entry at a time left the
+// CPU waiting between calls. Run a few at once instead — same order, same result.
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const run = async () => { while (next < items.length) { const i = next++; out[i] = await fn(items[i]); } };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
   return out;
+}
+
+const MG_PAGE = 500;      // the relay's largest page
+const MG_MAX_PAGES = 400; // safety valve only: 200k entries is past any real room
+
+function fetchLogPage(before) {
+  const q = new URLSearchParams({ limit: String(MG_PAGE) });
+  if (before) q.set('before', String(before));
+  return storeFetch('/h/log?' + q, { timeout: 30000 }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+}
+
+// Walk the whole encrypted log, newest page first, handing each decoded batch to
+// `onBatch` so the manager can paint as it goes. The loop follows the server's
+// `more` flag all the way down (no page cap), so messages from months back are
+// read too, and the next page is fetched while the current one is decrypted.
+async function fetchAllContent(onBatch) {
+  let pending = fetchLogPage(null);
+  for (let page = 0; page < MG_MAX_PAGES; page++) {
+    const data = await pending;
+    if (!data || !data.items?.length) break;
+    const before = data.items[data.items.length - 1].ts;
+    pending = data.more ? fetchLogPage(before) : null;
+    const decoded = await mapLimit(data.items, 32, openEvent);
+    const batch = decoded.filter((ev) => ev && (ev.k === 'text' || (ev.k === 'file' && validFileEvent(ev))));
+    if (batch.length) onBatch?.(batch);
+    if (!pending) break;
+  }
 }
 
 function fmtBytes(n) {
@@ -2948,38 +2976,76 @@ function renderUsage(u) {
   $('mg-bar').style.width = `${Math.min(100, (u.totalBytes / u.capBytes) * 100).toFixed(1)}%`;
 }
 
+// Search folds away the things that differ between what people type and what is
+// stored: Persian/Arabic digit shapes, the Arabic yeh/kaf, and the ZWNJ that
+// sits inside words like «می‌شود».
+const foldDigits = (s) => s.replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/[٠-٩]/g, (d) => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
+const MG_FOLD = (s) => foldDigits(String(s).toLowerCase()).replace(/[\u200c\u200d]/g, '').replace(/[يى]/g, 'ی').replace(/ك/g, 'ک');
+
+const mgTitle = (ev, kind) => kind === 'text' ? ev.body : kind === 'ig' ? (ev.preview?.title || 'پست اینستاگرام') : String(ev.name || MG_LABEL[kind]);
+const mgWho = (ev) => (ev.a === myDev ? 'شما' : (knownNames.get(ev.a) || ev.an || 'مخاطب'));
+const mgWhen = (ev) => new Date(ev.ts).toLocaleString('fa-IR', { dateStyle: 'medium', timeStyle: 'short' });
+function mgSearchText(ev) {
+  if (ev._mgq === undefined) ev._mgq = MG_FOLD(`${mgTitle(ev, MG_KIND(ev))}\n${mgWho(ev)}\n${MG_LABEL[MG_KIND(ev)]}\n${mgWhen(ev)}`);
+  return ev._mgq;
+}
+function mgRows() {
+  const terms = mgQuery.trim() ? MG_FOLD(mgQuery.trim()).split(/\s+/) : null;
+  return mgItems.filter((ev) => {
+    if (mgFilter !== 'all' && MG_KIND(ev) !== mgFilter) return false;
+    if (!terms) return true;
+    const hay = mgSearchText(ev);
+    return terms.every((t) => hay.includes(t));
+  });
+}
+
+function mgRow(ev) {
+  const kind = MG_KIND(ev);
+  const li = el('li', mgSelected.has(ev.id) ? 'selected' : '');
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.checked = mgSelected.has(ev.id);
+  box.setAttribute('aria-label', 'انتخاب');
+  box.onclick = (e) => {
+    e.stopPropagation();
+    if (box.checked) mgSelected.add(ev.id); else mgSelected.delete(ev.id);
+    li.classList.toggle('selected', box.checked);
+    syncManagerTools();
+  };
+  const ic = el('span', `mg-ic k-${kind}`);
+  ic.append(icon(MG_ICON[kind]));
+  const info = el('div', 'mg-info');
+  const size = ev.k === 'file' ? ev.size : te.encode(ev.body || '').length;
+  info.append(el('div', 'mg-title', mgTitle(ev, kind).slice(0, 120)), el('div', 'mg-meta', `${MG_LABEL[kind]} · ${mgWho(ev)} · ${mgWhen(ev)} · ${fmtSize(size)}`));
+  li.append(box, ic, info);
+  li.onclick = () => goToMessage(ev.id); // the checkbox selects; the row jumps to the message
+  return li;
+}
+
 function renderManager() {
   const list = $('mg-list');
-  list.textContent = '';
-  const rows = mgItems.filter((ev) => mgFilter === 'all' || MG_KIND(ev) === mgFilter);
-  $('mg-sub').textContent = `${fa(mgItems.length)} مورد ذخیره‌شده · رمزشده روی سرور`;
-  $('mg-empty').hidden = rows.length > 0;
+  const rows = mgRows();
+  const shown = rows.slice(0, mgShown);
+  const busy = mgBusy ? ' · در حال خواندن…' : '';
+  $('mg-sub').textContent = mgQuery.trim()
+    ? `${fa(rows.length)} نتیجه از ${fa(mgItems.length)} مورد${busy}`
+    : `${fa(mgItems.length)} مورد ذخیره‌شده · رمزشده روی سرور${busy}`;
   for (const b of $('mg-filter').querySelectorAll('button')) b.classList.toggle('active', b.dataset.f === mgFilter);
-  for (const ev of rows) {
-    const kind = MG_KIND(ev);
-    const li = el('li', mgSelected.has(ev.id) ? 'selected' : '');
-    const box = document.createElement('input');
-    box.type = 'checkbox';
-    box.checked = mgSelected.has(ev.id);
-    box.setAttribute('aria-label', 'انتخاب');
-    box.onclick = (e) => {
-      e.stopPropagation();
-      if (box.checked) mgSelected.add(ev.id); else mgSelected.delete(ev.id);
-      li.classList.toggle('selected', box.checked);
-      syncManagerTools();
-    };
-    const ic = el('span', `mg-ic k-${kind}`);
-    ic.append(icon(MG_ICON[kind]));
-    const info = el('div', 'mg-info');
-    const title = kind === 'text' ? ev.body : kind === 'ig' ? (ev.preview?.title || 'پست اینستاگرام') : String(ev.name || MG_LABEL[kind]);
-    const who = ev.a === myDev ? 'شما' : (knownNames.get(ev.a) || ev.an || 'مخاطب');
-    const when = new Date(ev.ts).toLocaleString('fa-IR', { dateStyle: 'medium', timeStyle: 'short' });
-    const size = ev.k === 'file' ? ev.size : te.encode(ev.body || '').length;
-    info.append(el('div', 'mg-title', title.slice(0, 120)), el('div', 'mg-meta', `${MG_LABEL[kind]} · ${who} · ${when} · ${fmtSize(size)}`));
-    li.append(box, ic, info);
-    li.onclick = () => goToMessage(ev.id); // the checkbox selects; the row jumps to the message
-    list.append(li);
+  const empty = $('mg-empty');
+  empty.hidden = shown.length > 0 || mgBusy;
+  empty.textContent = mgQuery.trim() ? 'چیزی با این جستجو پیدا نشد.' : 'چیزی برای نمایش نیست.';
+  const frag = document.createDocumentFragment();
+  for (const ev of shown) frag.append(mgRow(ev));
+  if (rows.length > shown.length) {
+    const li = el('li', 'mg-more');
+    const btn = el('button', 'btn btn-soft btn-sm', `نمایش موردهای قدیمی‌تر (${fa(rows.length - shown.length)} مورد)`);
+    btn.type = 'button';
+    btn.onclick = () => { mgShown += MG_RENDER; renderManager(); };
+    li.append(btn);
+    frag.append(li);
   }
+  list.textContent = '';
+  list.append(frag);
   syncManagerTools();
 }
 
@@ -2989,7 +3055,7 @@ async function goToMessage(id) {
   $('manage-modal').hidden = true;
   if (!messages.has(id) && histMore) {
     toast('در حال پیدا کردن پیام…');
-    for (let i = 0; i < 40 && !messages.has(id) && histMore; i++) {
+    for (let i = 0; i < 300 && !messages.has(id) && histMore; i++) {
       while (histLoading) await sleep(50);
       await loadHistory(false);
     }
@@ -3007,21 +3073,39 @@ function syncManagerTools() {
   const n = mgSelected.size;
   $('mg-count').textContent = n ? `${fa(n)} مورد انتخاب شده` : '';
   $('mg-del').disabled = !n;
-  const visible = mgItems.filter((ev) => mgFilter === 'all' || MG_KIND(ev) === mgFilter);
+  const visible = mgRows();
   $('mg-all').checked = visible.length > 0 && visible.every((ev) => mgSelected.has(ev.id));
 }
 
 function bindManager() {
   $('mg-close').onclick = () => { $('manage-modal').hidden = true; };
   $('manage-modal').addEventListener('click', (e) => { if (e.target === $('manage-modal')) $('manage-modal').hidden = true; });
+  $('mg-search').addEventListener('input', () => {
+    mgQuery = $('mg-search').value;
+    mgShown = MG_RENDER;
+    $('mg-search-clear').hidden = !mgQuery;
+    renderManager();
+  });
+  $('mg-search-clear').onclick = () => { $('mg-search').value = ''; $('mg-search').dispatchEvent(new Event('input')); $('mg-search').focus(); };
+  $('mg-search').addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if ($('mg-search').value) $('mg-search-clear').click();
+    else $('mg-search').blur();
+  });
+  // Ctrl/⌘+F jumps to the search box while the manager is open.
+  window.addEventListener('keydown', (e) => {
+    if ($('manage-modal').hidden) return;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') { e.preventDefault(); $('mg-search').focus(); $('mg-search').select(); }
+  });
   $('mg-filter').onclick = (e) => {
     const f = e.target.closest('button')?.dataset.f;
     if (!f) return;
     mgFilter = f;
+    mgShown = MG_RENDER;
     renderManager();
   };
   $('mg-all').onchange = () => {
-    const visible = mgItems.filter((ev) => mgFilter === 'all' || MG_KIND(ev) === mgFilter);
+    const visible = mgRows();
     for (const ev of visible) { if ($('mg-all').checked) mgSelected.add(ev.id); else mgSelected.delete(ev.id); }
     renderManager();
   };
@@ -3924,7 +4008,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-15.2';
+const APP_VERSION = '2026-10-16.1';
 let updateOffered = false;
 async function checkUpdate() {
   if (updateOffered || document.hidden) return;
@@ -4722,6 +4806,7 @@ function bindEntry() {
 
 function bindUi() {
   $('copy-code-btn').onclick = () => copy(room.code);
+  $('rail-copy').onclick = () => copy(room.code);
   $('lock').onsubmit = (e) => { e.preventDefault(); tryUnlock(); };
   $('lock-leave').onclick = async () => { if (await ask('خروج و پاک‌سازی', 'همه‌ی پیام‌ها از حافظه پاک می‌شود و از اتاق خارج می‌شوید. ادامه؟', 'خروج')) leave(); };
   document.addEventListener('click', (e) => {

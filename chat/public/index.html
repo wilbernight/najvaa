@@ -66,6 +66,7 @@
   <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></symbol>
   <symbol id="i-repeat" viewBox="0 0 24 24"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></symbol>
   <symbol id="i-hash" viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20.5 20.5-4.2-4.2"/></symbol>
 </svg>
 
 <!-- ================= Landing ================= -->
@@ -154,6 +155,32 @@
 
 <!-- ================= Chat ================= -->
 <main id="chat" class="screen" hidden>
+  <aside id="rail" class="rail">
+    <div class="rail-head">
+      <div class="brand-mark"><svg class="i"><use href="#i-lock"/></svg></div>
+      <span class="brand-name">نجوا</span>
+    </div>
+    <div class="rail-room">
+      <div class="rail-room-label"><svg class="i"><use href="#i-hash"/></svg> کد این اتاق</div>
+      <div id="rail-code" class="rail-room-code" dir="ltr"></div>
+      <button id="rail-copy" type="button" class="btn btn-soft btn-sm wide"><svg class="i"><use href="#i-copy"/></svg> کپی کد اتاق</button>
+    </div>
+    <div id="menu" class="popover menu-pop" hidden>
+      <button data-act="safety"><svg class="i"><use href="#i-shield"/></svg> کد امنیتی جلسه</button>
+      <button data-act="copy"><svg class="i"><use href="#i-copy"/></svg> کپی کد اتاق <b id="menu-code" class="menu-code" dir="ltr"></b></button>
+      <button data-act="lock"><svg class="i"><use href="#i-lock"/></svg> قفل کردن الان</button>
+      <button data-act="preview"><svg class="i"><use href="#i-insta"/></svg> <span id="preview-toggle">پیش‌نمایش اینستاگرام</span><span id="preview-switch" class="switch on"></span></button>
+      <hr>
+      <button data-act="manage"><svg class="i"><use href="#i-server"/></svg> مدیریت محتوا</button>
+      <button data-act="veil"><svg class="i"><use href="#i-eye-off"/></svg> <span>متن محرمانه (ضد زوم)</span><span id="veil-switch" class="switch on"></span></button>
+      <button data-act="notify"><svg class="i"><use href="#i-message"/></svg> <span>اعلان پیام جدید</span><span id="notify-switch" class="switch"></span></button>
+      <button data-act="voicefx"><svg class="i"><use href="#i-sparkle"/></svg> <span>صدای ناشناس (تماس رباتیک، ویس با صدای هوش مصنوعی)</span><span id="voicefx-switch" class="switch"></span></button>
+      <button data-act="clear"><svg class="i"><use href="#i-trash"/></svg> پاک کردن گفتگو برای همه</button>
+      <button data-act="leave" class="danger"><svg class="i"><use href="#i-logout"/></svg> خروج از اتاق</button>
+    </div>
+    <p class="rail-foot"><svg class="i"><use href="#i-lock"/></svg> کلیدها فقط روی همین دستگاه ساخته می‌شوند؛ سرور فقط نسخه‌ی رمزشده را نگه می‌دارد و هیچ کلیدی ندارد.</p>
+  </aside>
+  <section class="conv">
   <header class="topbar">
     <div class="peer">
       <div class="avatar-sm"><svg class="i"><use href="#i-user"/></svg><span id="status-dot" class="presence"></span></div>
@@ -179,20 +206,6 @@
     <button data-ttl="300">۵ دقیقه</button>
     <button data-ttl="1800">۳۰ دقیقه</button>
     <button data-ttl="3600">۱ ساعت</button>
-  </div>
-
-  <div id="menu" class="popover menu-pop" hidden>
-    <button data-act="safety"><svg class="i"><use href="#i-shield"/></svg> کد امنیتی جلسه</button>
-    <button data-act="copy"><svg class="i"><use href="#i-copy"/></svg> کپی کد اتاق <b id="menu-code" class="menu-code" dir="ltr"></b></button>
-    <button data-act="lock"><svg class="i"><use href="#i-lock"/></svg> قفل کردن الان</button>
-    <button data-act="preview"><svg class="i"><use href="#i-insta"/></svg> <span id="preview-toggle">پیش‌نمایش اینستاگرام</span><span id="preview-switch" class="switch on"></span></button>
-    <hr>
-    <button data-act="manage"><svg class="i"><use href="#i-server"/></svg> مدیریت محتوا</button>
-    <button data-act="veil"><svg class="i"><use href="#i-eye-off"/></svg> <span>متن محرمانه (ضد زوم)</span><span id="veil-switch" class="switch on"></span></button>
-    <button data-act="notify"><svg class="i"><use href="#i-message"/></svg> <span>اعلان پیام جدید</span><span id="notify-switch" class="switch"></span></button>
-    <button data-act="voicefx"><svg class="i"><use href="#i-sparkle"/></svg> <span>صدای ناشناس (تماس رباتیک، ویس با صدای هوش مصنوعی)</span><span id="voicefx-switch" class="switch"></span></button>
-    <button data-act="clear"><svg class="i"><use href="#i-trash"/></svg> پاک کردن گفتگو برای همه</button>
-    <button data-act="leave" class="danger"><svg class="i"><use href="#i-logout"/></svg> خروج از اتاق</button>
   </div>
 
   <div id="banner" class="banner" hidden></div>
@@ -267,6 +280,7 @@
       <input id="file-input" type="file" multiple hidden>
     </form>
   </div>
+  </section>
   <div id="drop-zone" class="drop-zone" hidden><div><svg class="i"><use href="#i-image"/></svg>رها کنید تا رمزشده ارسال شود</div></div>
 </main>
 
@@ -349,6 +363,11 @@
       <div class="mg-row small"><span>کل فضای سرور</span><span id="mg-total" dir="rtl">—</span></div>
       <div class="mg-track"><i id="mg-bar"></i></div>
       <p class="mg-note"><svg class="i"><use href="#i-timer"/></svg> محتوای قدیمی‌تر از ۳ ماه خودکار پاک می‌شود؛ اگر کل سرور از ۵۰ گیگابایت بیشتر شود، قدیمی‌ترین‌ها زودتر پاک می‌شوند.</p>
+    </div>
+    <div class="mg-search">
+      <svg class="i"><use href="#i-search"/></svg>
+      <input id="mg-search" type="search" maxlength="100" autocomplete="off" placeholder="جستجو در متن، فرستنده، نوع و تاریخ…" aria-label="جستجو در محتوای ذخیره‌شده‌ی این اتاق">
+      <button id="mg-search-clear" type="button" class="btn-icon sm" aria-label="پاک کردن جستجو" hidden><svg class="i"><use href="#i-x"/></svg></button>
     </div>
     <div id="mg-filter" class="seg mg-seg">
       <button data-f="all" class="active">همه</button>
