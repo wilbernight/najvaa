@@ -38,7 +38,18 @@ const MAX_SKIP = 500;
 const CHUNK = 128 * 1024;
 const MAX_FILE = 100 * 1024 * 1024;
 const TTLS = [0, 10, 30, 60, 300, 1800, 3600];
-const REACTIONS = ['❤️', '😂', '😍', '😮', '😢', '🔥', '👍'];
+const REACTIONS = ['❤️', '😂', '😍', '😮', '😢', '🔥', '👍', '🙏']; // the quick bar; the + picker allows any emoji
+// One emoji, nothing else. `v` flag + RGI_Emoji where supported (whole ZWJ
+// sequences, flags, keycaps), a looser pattern on older engines.
+const EMOJI_RE = (() => {
+  try { return new RegExp('\\p{RGI_Emoji}', 'gv'); }
+  catch { return /(?:\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3|\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*)/gu; }
+})();
+function isOneEmoji(e) {
+  if (typeof e !== 'string' || !e || e.length > 32) return false;
+  const m = e.match(EMOJI_RE);
+  return !!m && m.length === 1 && m[0] === e;
+}
 const IG_LINK_RE = /https?:\/\/(?:www\.)?(?:instagram\.com|instagr\.am)\/[^\s]+/i;
 const IG_PATH_RE = /\/(?:[A-Za-z0-9_.]+\/)?(p|reel|reels|tv)\/([A-Za-z0-9_-]{5,64})/;
 const IG_CANON_RE = /^https:\/\/www\.instagram\.com\/(p|reel|tv)\/[A-Za-z0-9_-]{5,64}\/$/;
@@ -414,6 +425,7 @@ function applyFeatures(f) {
   $('preview-switch').classList.toggle('on', previewsOn);
 }
 
+let peerTitleText = 'مخاطب امن'; // kept as text: the header may show emoji as images
 function updatePresence() {
   const sec = secureSessions();
   if (sec.length) setStatus('secure', sec.length);
@@ -421,7 +433,8 @@ function updatePresence() {
   else if (sessions.size) setStatus('handshake');
   else if (ws && ws.readyState === 1) setStatus('waiting');
   $('call-btn').disabled = !sec.length || features.calls === false;
-  $('peer-title').textContent = sec.length ? sec.map((x) => x.name || 'مخاطب').join(' · ') : 'مخاطب امن';
+  peerTitleText = sec.length ? sec.map((x) => x.name || 'مخاطب').join(' · ') : 'مخاطب امن';
+  $('peer-title').textContent = peerTitleText;
   scheduleChatRow();
   document.body.classList.toggle('multi', knownNames.size > 1 || sessions.size > 1);
   if (!sec.length) $('typing').hidden = true;
@@ -1366,6 +1379,18 @@ function renderIgModal() {
     };
     row.append(b);
   }
+  if (entry.react.me && !REACTIONS.includes(entry.react.me)) {
+    const b = el('button', 'mine', entry.react.me); // a picked reaction stays visible here
+    b.type = 'button';
+    b.onclick = () => { setReaction(entry, null); renderIgModal(); };
+    row.append(b);
+  }
+  const more = el('button', 'more-btn');
+  more.type = 'button';
+  more.setAttribute('aria-label', 'ایموجی‌های بیشتر');
+  more.append(icon('plus'));
+  more.onclick = (ev) => { ev.stopPropagation(); openEmojiPicker((e) => { setReaction(entry, entry.react.me === e ? null : e); renderIgModal(); }); };
+  row.append(more);
   const others = Object.entries(entry.react.peers).filter(([pid, e]) => e && !entry.reply.peers[pid]);
   $('igm-peer').hidden = !others.length;
   $('igm-peer').textContent = others.map(([pid, e]) => `ری‌اکشن ${peerName(pid)}: ${e}`).join('   ·   ');
@@ -1516,6 +1541,12 @@ function openReactBar(entry) {
     b.onclick = (ev) => { ev.stopPropagation(); setReaction(entry, entry.react.me === e ? null : e); bar.hidden = true; };
     bar.append(b);
   }
+  const more = el('button', 'more-btn');
+  more.type = 'button';
+  more.setAttribute('aria-label', 'ایموجی‌های بیشتر');
+  more.append(icon('plus'));
+  more.onclick = (ev) => { ev.stopPropagation(); bar.hidden = true; openEmojiPicker((e) => setReaction(entry, entry.react.me === e ? null : e)); };
+  bar.append(more);
   const rb = el('button', 'reply-btn');
   rb.type = 'button';
   rb.setAttribute('aria-label', 'پاسخ');
@@ -2714,7 +2745,7 @@ function rememberName(dev, name) {
 const authorOf = (s, o) => (PID_RE.test(o.a || '') ? o.a : (s.dev || s.peer));
 
 function applyReaction(ev, quiet) {
-  if (!(ev.e == null || REACTIONS.includes(ev.e)) || !PID_RE.test(ev.a || '')) return;
+  if (!(ev.e == null || isOneEmoji(ev.e)) || !PID_RE.test(ev.a || '')) return;
   const m = messages.get(ev.target);
   if (!m) {
     const list = pendingReacts.get(ev.target) || [];
@@ -4057,7 +4088,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-16.3';
+const APP_VERSION = '2026-10-16.4';
 let updateOffered = false;
 async function checkUpdate() {
   if (updateOffered || document.hidden) return;
@@ -4074,33 +4105,209 @@ async function checkUpdate() {
   } catch {}
 }
 
-// ---------- emoji picker ----------
-const EMOJI = {
+// ---------- emoji: Animated Fluent set ----------
+// The set lives in /emoji/ on our own server (built by chat/emoji-src), so no
+// third party sees which emoji anyone uses. Until index.json arrives, or if the
+// server has no set, emoji stay plain text and the small fallback picker works.
+const EMOJI_FALLBACK = {
   'شکلک‌ها': '😀 😃 😄 😁 😆 😅 😂 🤣 😊 😇 🙂 🙃 😉 😌 😍 🥰 😘 😗 😚 😋 😛 😝 😜 🤪 🤨 🧐 🤓 😎 🥸 🤩 🥳 😏 😒 😞 😔 😟 😕 🙁 😣 😖 😫 😩 🥺 😢 😭 😤 😠 😡 🤬 🤯 😳 🥵 🥶 😱 😨 😰 😥 😓 🤗 🤔 🤭 🤫 😶 😐 😑 😬 🙄 😯 😮 😲 🥱 😴 🤤 😪 😵 🤐 🥴 🤢 🤮 🤧 😷 🤒 😈 👻 💀 🤡 💩 🙈 🙉 🙊',
   'عاشقانه': '❤️ 🧡 💛 💚 💙 💜 🖤 🤍 🤎 💔 ❣️ 💕 💞 💓 💗 💖 💘 💝 💋 🌹 💐 🌸 🌷 💍 🫶 😻 💌 🥂',
   'دست‌ها': '👍 👎 👌 🤌 ✌️ 🤞 🤟 🤘 🤙 👈 👉 👆 👇 ☝️ ✋ 🤚 🖐 👋 👏 🙌 👐 🤲 🙏 💪 🤝 ✍️',
   'متفرقه': '🔥 ✨ 🎉 🎊 🎁 🎈 🌟 ⭐ 💫 ☀️ 🌙 🌈 ☕ 🍕 🍔 🍟 🍿 🍰 🎂 🍫 🍓 🍉 🍷 🍹 🎵 🎶 🎮 ⚽ 🚗 ✈️ 🏖 📷 🎬 💯 ✅ ❌ ❓ ❗ 💤 💬 👀 🐶 🐱 🐻 🐼 🦋 🌍',
 };
+let emojiIndex = null;      // { g: [[title, [glyph…]]…], t: {base: [toned…]}, n: {glyph: name} }
+const emojiKeys = new Set(); // keys of every emoji we have an image for
+const emojiKey = (g) => [...g].map((c) => c.codePointAt(0).toString(16)).filter((x) => x !== 'fe0f').join('-');
+const emojiSrc = (g, animated) => `/emoji/${animated ? 'a' : 's'}/${emojiKey(g)}.webp`;
+
+// Where an emoji plays its animation; everywhere else (inline text, lists) a
+// still frame keeps long chats light.
+const EMO_ANIMATED = '.big, .react-bar, .reacts, .igm-reacts, .act-summary, .emo-anim';
+const EMO_SKIP = 'textarea, input, [contenteditable], script, style, .no-emo';
+
+function emojiImg(g, animated) {
+  const img = document.createElement('img');
+  img.className = 'emo';
+  img.alt = g; // copy/paste and screen readers still get the character
+  img.draggable = false;
+  img.decoding = 'async';
+  img.loading = 'lazy';
+  img.src = emojiSrc(g, animated);
+  img.onerror = () => img.replaceWith(document.createTextNode(g)); // not in the set after all
+  return img;
+}
+
+function emojifyText(node) {
+  const text = node.nodeValue;
+  if (!text || !/[©®‼-㊙\ud83c-\ud83e#*0-9]/.test(text)) return;
+  EMOJI_RE.lastIndex = 0;
+  let m, last = 0, frag = null;
+  const animated = !!node.parentElement?.closest(EMO_ANIMATED);
+  while ((m = EMOJI_RE.exec(text))) {
+    if (!emojiKeys.has(emojiKey(m[0]))) continue;
+    frag ??= document.createDocumentFragment();
+    if (m.index > last) frag.append(text.slice(last, m.index));
+    frag.append(emojiImg(m[0], animated));
+    last = m.index + m[0].length;
+  }
+  if (!frag) return;
+  if (last < text.length) frag.append(text.slice(last));
+  node.replaceWith(frag);
+}
+
+function emojify(root) {
+  if (!emojiKeys.size || !root) return;
+  if (root.nodeType === 3) { if (!root.parentElement?.closest(EMO_SKIP)) emojifyText(root); return; }
+  if (root.nodeType !== 1 || root.closest(EMO_SKIP)) return;
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.parentElement.closest(EMO_SKIP) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+  const nodes = [];
+  while (walk.nextNode()) nodes.push(walk.currentNode);
+  for (const n of nodes) emojifyText(n);
+}
+
+// Swap emoji for images wherever the app writes text, without touching every
+// render function: watch the DOM and convert what gets added.
+const emojiObserver = new MutationObserver((list) => {
+  for (const r of list) {
+    if (r.type === 'characterData') emojify(r.target);
+    else for (const n of r.addedNodes) emojify(n);
+  }
+});
+
+async function loadEmoji() {
+  try {
+    const r = await fetch('/emoji/index.json', { credentials: 'omit' });
+    if (!r.ok) return;
+    const idx = await r.json();
+    if (!idx || !Array.isArray(idx.g)) return;
+    emojiIndex = idx;
+    for (const [, list] of idx.g) for (const g of list) emojiKeys.add(emojiKey(g));
+    for (const list of Object.values(idx.t || {})) for (const g of list) emojiKeys.add(emojiKey(g));
+    emojify(document.body);
+    emojiObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+    if (emojiPanelBuilt) { emojiPanelBuilt = false; $('emoji-panel').textContent = ''; }
+  } catch {}
+}
+
+// ---------- emoji picker ----------
+// Signal-like: search, recents, a skin-tone choice, then the groups. Built the
+// first time it opens. `pickHandler` set = choosing a reaction, not typing.
+let emojiPanelBuilt = false;
+let pickHandler = null;
+const EMOJI_TONES = ['', '🏻', '🏼', '🏽', '🏾', '🏿'];
+let emojiTone = (() => { try { return Number(localStorage.getItem('najva:tone')) || 0; } catch { return 0; } })();
+let emojiRecent = (() => { try { return JSON.parse(localStorage.getItem('najva:recent-emoji') || '[]').filter(isOneEmoji).slice(0, 24); } catch { return []; } })();
+
+function toned(g) {
+  if (!emojiTone || !emojiIndex?.t?.[g]) return g;
+  const want = EMOJI_TONES[emojiTone];
+  return emojiIndex.t[g].find((x) => x.includes(want) && [...x].filter((c) => EMOJI_TONES.includes(c)).length === 1) || g;
+}
+
+function emojiButton(g) {
+  const b = el('button', 'emo-btn');
+  b.type = 'button';
+  b.title = emojiIndex?.n?.[g] || '';
+  b.dataset.e = g;
+  if (emojiKeys.has(emojiKey(g))) {
+    const img = emojiImg(g, false);
+    b.append(img);
+    // Hovering plays the animation, as a preview.
+    b.onmouseenter = () => { img.src = emojiSrc(g, true); };
+    b.onmouseleave = () => { img.src = emojiSrc(g, false); };
+  } else b.textContent = g;
+  return b;
+}
+
+function useEmoji(g) {
+  emojiRecent = [g, ...emojiRecent.filter((x) => x !== g)].slice(0, 24);
+  try { localStorage.setItem('najva:recent-emoji', JSON.stringify(emojiRecent)); } catch {}
+  if (pickHandler) {
+    const fn = pickHandler;
+    closeEmojiPicker();
+    fn(g);
+    return;
+  }
+  const input = $('input');
+  const start = input.selectionStart ?? input.value.length;
+  input.setRangeText(g, start, input.selectionEnd ?? start, 'end');
+  input.focus();
+  autoGrow();
+}
+
+function renderEmojiGroups() {
+  const body = $('emoji-panel').querySelector('.emo-body');
+  const q = $('emoji-panel').querySelector('.emo-search input').value.trim().toLowerCase();
+  body.textContent = '';
+  const groups = emojiIndex ? emojiIndex.g : Object.entries(EMOJI_FALLBACK).map(([t, l]) => [t, l.split(' ')]);
+  if (q) {
+    const hits = [];
+    for (const [, list] of groups) for (const g of list) if ((emojiIndex?.n?.[g] || '').toLowerCase().includes(q) || g === q) hits.push(g);
+    const grid = el('div', 'emoji-grid');
+    for (const g of hits.slice(0, 300)) grid.append(emojiButton(toned(g)));
+    body.append(hits.length ? grid : el('p', 'emo-none', 'ایموجی‌ای پیدا نشد (نام‌ها انگلیسی‌اند، مثلاً heart)'));
+    return;
+  }
+  const sections = emojiRecent.length ? [['اخیر', emojiRecent], ...groups] : groups;
+  sections.forEach(([title, list], i) => {
+    body.append(el('h4', '', title));
+    const grid = el('div', 'emoji-grid');
+    for (const g of list) grid.append(emojiButton(i === 0 && emojiRecent.length ? g : toned(g)));
+    body.append(grid);
+  });
+}
+
 function buildEmojiPanel() {
   const panel = $('emoji-panel');
-  for (const [title, list] of Object.entries(EMOJI)) {
-    panel.append(el('h4', '', title));
-    const grid = el('div', 'emoji-grid');
-    for (const e of list.split(' ')) {
-      const b = el('button', '', e);
+  if (emojiPanelBuilt) return;
+  emojiPanelBuilt = true;
+  panel.textContent = '';
+  const head = el('div', 'emo-head');
+  const search = el('label', 'emo-search');
+  const input = document.createElement('input');
+  input.type = 'search';
+  input.placeholder = 'جستجوی ایموجی';
+  input.autocomplete = 'off';
+  input.oninput = () => renderEmojiGroups();
+  search.append(icon('search'), input);
+  head.append(search);
+  if (emojiIndex) {
+    const tones = el('div', 'emo-tones');
+    EMOJI_TONES.forEach((t, i) => {
+      const b = el('button', `tone t${i}${i === emojiTone ? ' on' : ''}`);
       b.type = 'button';
-      b.onclick = (ev) => {
-        ev.stopPropagation();
-        const input = $('input');
-        const start = input.selectionStart ?? input.value.length;
-        input.setRangeText(e, start, input.selectionEnd ?? start, 'end');
-        input.focus();
-        autoGrow();
+      b.setAttribute('aria-label', i ? `رنگ پوست ${fa(i)}` : 'رنگ پوست پیش‌فرض');
+      b.onclick = () => {
+        emojiTone = i;
+        try { localStorage.setItem('najva:tone', String(i)); } catch {}
+        for (const x of tones.children) x.classList.toggle('on', x === b);
+        renderEmojiGroups();
       };
-      grid.append(b);
-    }
-    panel.append(grid);
+      tones.append(b);
+    });
+    head.append(tones);
   }
+  panel.append(head, el('div', 'emo-body no-emo'));
+  panel.querySelector('.emo-body').addEventListener('click', (e) => {
+    const b = e.target.closest('.emo-btn');
+    if (b) { e.stopPropagation(); useEmoji(b.dataset.e); }
+  });
+  renderEmojiGroups();
+}
+
+function openEmojiPicker(onPick = null) {
+  closePanels();
+  buildEmojiPanel();
+  pickHandler = onPick;
+  const p = $('emoji-panel');
+  p.classList.toggle('pick-mode', !!onPick);
+  p.hidden = false;
+  if (onPick) renderEmojiGroups(); // recents first, fresh
+}
+function closeEmojiPicker() {
+  pickHandler = null;
+  $('emoji-panel').classList.remove('pick-mode');
+  $('emoji-panel').hidden = true;
 }
 
 // ---------- confirm dialog ----------
@@ -4216,7 +4423,7 @@ function scheduleChatRow() {
 // The row mirrors the conversation header plus the latest message, the way a
 // Signal chat list row does.
 function updateChatRow() {
-  $('row-name').textContent = $('peer-title').textContent;
+  $('row-name').textContent = peerTitleText;
   $('row-dot').className = $('status-dot').className;
   let last = null;
   for (const m of messages.values()) if (!last || m.ts >= last.ts) last = m;
@@ -4275,6 +4482,8 @@ function closePanels() {
   $('menu').hidden = true;
   $('ttl-menu').hidden = true;
   $('emoji-panel').hidden = true;
+  $('emoji-panel').classList.remove('pick-mode');
+  pickHandler = null;
   $('gif-panel').hidden = true;
   $('react-bar').hidden = true;
 }
@@ -4950,7 +5159,7 @@ function bindUi() {
     if (files.length) { e.preventDefault(); sendFiles(files); }
   });
 
-  $('emoji-btn').onclick = (e) => { e.stopPropagation(); const p = $('emoji-panel'); const open = p.hidden; closePanels(); p.hidden = !open; };
+  $('emoji-btn').onclick = (e) => { e.stopPropagation(); if ($('emoji-panel').hidden || pickHandler) openEmojiPicker(); else closeEmojiPicker(); };
   $('emoji-panel').onclick = (e) => e.stopPropagation();
   $('gif-btn').onclick = (e) => {
     e.stopPropagation();
@@ -5126,7 +5335,7 @@ function bindUi() {
     if (!leaving && (messages.size || call)) e.preventDefault();
   });
   setInterval(tickTimers, 1000);
-  buildEmojiPanel();
+  loadEmoji();
   setTtl(ttl);
   autoGrow();
 }

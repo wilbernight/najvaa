@@ -921,3 +921,38 @@ body.veil .msg.peek .quote-text, body.veil .msg.reveal .quote-text { filter: non
   .sheet-btn { height: 54px; }
   .lib-list li, .mg-list li { padding-block: 11px; }
 }
+
+/* ---------- animated emoji (Animated Fluent set, /emoji/) ---------- */
+img.emo { display: inline-block; width: 1.3em; height: 1.3em; vertical-align: -0.3em; margin: 0 .03em; object-fit: contain; user-select: none; -webkit-user-drag: none; pointer-events: none; }
+.msg .body.big { line-height: 1; }
+.msg .body.big img.emo { width: 64px; height: 64px; vertical-align: middle; margin: 0 1px; }
+.react-bar button img.emo { width: 32px; height: 32px; vertical-align: middle; }
+.reacts img.emo { width: 18px; height: 18px; vertical-align: -4px; }
+.igm-reacts button img.emo { width: 30px; height: 30px; vertical-align: middle; }
+.act-summary .stack img.emo { width: 18px; height: 18px; }
+.react-bar .more-btn, .igm-reacts .more-btn { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; color: var(--text-2); background: var(--surface-2); flex: none; }
+.react-bar .more-btn:hover, .igm-reacts .more-btn:hover { color: var(--text); background: var(--surface-3); }
+.react-bar .more-btn .i, .igm-reacts .more-btn .i { width: 20px; height: 20px; }
+
+/* picker */
+.emoji-panel:not(.gif-panel) { display: flex; flex-direction: column; height: min(400px, 60dvh); max-height: none; padding: 8px; overflow: hidden; }
+.emoji-panel[hidden] { display: none !important; }
+.emo-head { display: flex; align-items: center; gap: 8px; flex: none; padding: 2px 2px 6px; }
+.emo-search { flex: 1; display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 10px; border-radius: 8px; background: var(--surface-2); min-width: 0; }
+.emo-search .i { width: 16px; height: 16px; color: var(--text-3); flex: none; }
+.emo-search input { flex: 1; min-width: 0; border: 0; outline: none; background: none; font-size: 13.5px; height: 100%; }
+.emo-search input::-webkit-search-cancel-button { display: none; }
+.emo-tones { display: flex; gap: 4px; flex: none; }
+.tone { width: 20px; height: 20px; border-radius: 50%; border: 2px solid transparent; }
+.tone.on { border-color: var(--brand-1); }
+.tone.t0 { background: #ffc83d; } .tone.t1 { background: #f7dece; } .tone.t2 { background: #f3d2a2; }
+.tone.t3 { background: #d5ab88; } .tone.t4 { background: #af7e57; } .tone.t5 { background: #7c533e; }
+.emo-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 2px; }
+.emo-body .emoji-grid { grid-template-columns: repeat(auto-fill, minmax(42px, 1fr)); }
+.emo-btn { height: 42px; border-radius: 8px; display: grid; place-items: center; font-size: 26px; transition: background .12s; }
+.emo-btn:hover { background: var(--surface-2); transform: none; }
+.emo-btn img.emo { width: 32px; height: 32px; margin: 0; vertical-align: middle; }
+.emo-none { text-align: center; color: var(--text-3); font-size: 13px; padding: 24px 8px; }
+/* picking a reaction: float the picker in the middle of the chat */
+.emoji-panel.pick-mode { position: fixed; z-index: 40; inset: auto; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(420px, calc(100vw - 32px)); height: min(440px, 70dvh); box-shadow: var(--shadow-lg); animation: fade .15s; }
+

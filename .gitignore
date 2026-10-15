@@ -16,3 +16,5 @@ panel/storage/framework/views/*
 !chat/public/ai/v1/vosk-fa.tar.gz
 .DS_Store
 Thumbs.db
+# animated emoji: built by chat/emoji-src/build_emoji.py, deployed separately
+chat/public/emoji/

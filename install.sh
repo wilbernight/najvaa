@@ -306,7 +306,8 @@ install_chat() {
     die "Port 8787 is already used by another program (an older relay?). Stop it first."
   fi
   mkdir -p "$SITE/public" "$SITE/server"
-  rsync -a --delete "$PKG/chat/public/" "$SITE/public/"
+  # /emoji/ is built and uploaded separately (chat/emoji-src); keep it.
+  rsync -a --delete --exclude /emoji/ "$PKG/chat/public/" "$SITE/public/"
   install -m 644 "$PKG/chat/server/relay.js" "$SITE/server/relay.js"
   chown -R root:root "$SITE"
   find "$SITE" -type d -exec chmod 755 {} +
@@ -592,6 +593,24 @@ server {
         add_header X-Content-Type-Options "nosniff" always;
         add_header Cross-Origin-Resource-Policy "same-origin" always;
         add_header Cross-Origin-Embedder-Policy "require-corp" always;
+        try_files $uri =404;
+    }
+
+    # Animated emoji (built by chat/emoji-src, uploaded separately). Not a
+    # versioned path, so a week for the images and an hour for the index.
+    location ^~ /emoji/ {
+        gzip_types application/json;
+        add_header Cache-Control "public, max-age=604800" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Cross-Origin-Resource-Policy "same-origin" always;
+        location = /emoji/index.json {
+            add_header Cache-Control "public, max-age=3600" always;
+            add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+            add_header X-Content-Type-Options "nosniff" always;
+            add_header Cross-Origin-Resource-Policy "same-origin" always;
+            try_files $uri =404;
+        }
         try_files $uri =404;
     }
 
