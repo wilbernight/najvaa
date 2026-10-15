@@ -788,6 +788,21 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({ noServer: true, maxPayload: 512 * 1024, perMessageDeflate: false });
 
+// The published app version (public/version.json next to this server). Sent in
+// every welcome, and pushed to every open app the moment a release changes the
+// file, so updates reach people at once without restarting the relay.
+const VERSION_FILE = path.join(__dirname, '..', 'public', 'version.json');
+function readAppVersion() {
+  try { const v = JSON.parse(fs.readFileSync(VERSION_FILE, 'utf8')).v; return typeof v === 'string' && v.length <= 40 ? v : ''; } catch { return ''; }
+}
+let appVersion = readAppVersion();
+fs.watchFile(VERSION_FILE, { interval: 5000 }, () => {
+  const v = readAppVersion();
+  if (!v || v === appVersion) return;
+  appVersion = v;
+  for (const ws of wss.clients) send(ws, { t: 'ver', v });
+});
+
 server.on('upgrade', (req, socket, head) => {
   let url;
   try { url = new URL(req.url, 'http://relay'); } catch { return socket.destroy(); }
@@ -860,7 +875,7 @@ async function onConnection(ws, roomId, cid, fresh) {
   for (const o of set) send(o, { t: 'peer-joined', id: cid });
   set.add(ws);
   const features = { gif: feature('gif'), preview: feature('preview'), calls: feature('calls') };
-  send(ws, { t: 'welcome', ice: features.calls ? ice : [], features, peers: [...set].filter((s) => s !== ws).map((s) => s.cid) });
+  send(ws, { t: 'welcome', ice: features.calls ? ice : [], features, peers: [...set].filter((s) => s !== ws).map((s) => s.cid), ver: appVersion });
 
   ws.on('pong', () => { ws.alive = true; });
 

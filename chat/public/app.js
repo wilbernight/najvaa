@@ -291,8 +291,12 @@ function wireSend(obj) {
 
 async function onWire(msg) {
   switch (msg.t) {
+    case 'ver':
+      if (typeof msg.v === 'string') newVersion(msg.v);
+      break;
     case 'welcome':
-      checkUpdate(); // a reconnect is often a relay restart, i.e. a release
+      if (typeof msg.ver === 'string' && msg.ver) newVersion(msg.ver); // the relay knows the published version
+      else checkUpdate();
       iceServers = Array.isArray(msg.ice) ? msg.ice : [];
       applyFeatures(msg.features);
       room.creating = false;
@@ -1257,6 +1261,11 @@ async function sendMediaEdit(entry) {
 }
 
 async function uploadBlob(blob, name) {
+  uploading++;
+  try { return await uploadBlobNow(blob, name); } finally { uploading--; }
+}
+
+async function uploadBlobNow(blob, name) {
   const idBytes = rand(12);
   const id = b64u(idBytes);
   const key = rand(32);
@@ -2263,7 +2272,14 @@ function askCaption(media) {
 }
 
 // extra (voice messages only): { voice: true, dur: seconds, wave: b64 levels, reply }
+// Uploads in progress (an update waits for them rather than cutting them off).
+let uploading = 0;
 async function sendFile(file, gif = false, extra = null) {
+  uploading++;
+  try { return await sendFileNow(file, gif, extra); } finally { uploading--; }
+}
+
+async function sendFileNow(file, gif = false, extra = null) {
   if (file.size > MAX_FILE) { toast(`حداکثر حجم فایل ${fa(100)} مگابایت است`); return; }
   let blob = file;
   if (!gif && file.type.startsWith('image/')) {
@@ -4719,7 +4735,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-16.8';
+const APP_VERSION = '2026-10-16.9';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.
@@ -4732,9 +4748,7 @@ async function checkUpdate() {
     const r = await fetch('/version.json', { cache: 'no-store', credentials: 'omit' });
     const { v } = await r.json();
     if (typeof v !== 'string' || v === APP_VERSION) return;
-    updateOffered = true;
-    if ($('chat').hidden) { leaving = true; location.reload(); return; } // nothing to lose yet
-    $('update-bar').hidden = false;
+    newVersion(v);
   } catch {} finally {
     updateChecking = false;
   }
@@ -4742,6 +4756,28 @@ async function checkUpdate() {
 function applyUpdate() {
   leaving = true;
   location.replace(room.code ? `/#${room.code}` : '/'); // only the password is asked again
+}
+
+// The relay announces each release (welcome.ver, and {t:'ver'} the moment it
+// is published). Update at once unless that would cut something off: a call,
+// a recording, an upload, an edit or a half-typed message get the blue bar
+// instead, and the update happens as soon as the app goes to the background.
+function updateBlocked() {
+  return !!(call || rec || editing || uploading || Date.now() < pickingUntil || $('input').value.trim() || !$('upload-hint').hidden);
+}
+function newVersion(v) {
+  if (v === APP_VERSION) return;
+  updateOffered = true;
+  // A half-finished deploy (new version.json, old app.js) must not reload in a loop.
+  let again = false;
+  try {
+    const last = JSON.parse(sessionStorage.getItem('najva:forced') || 'null');
+    again = !!last && last.v === v && Date.now() - last.at < 60000;
+    if (!again) sessionStorage.setItem('najva:forced', JSON.stringify({ v, at: Date.now() }));
+  } catch {}
+  if (!again && $('chat').hidden) { leaving = true; location.reload(); return; }
+  if (!again && !updateBlocked()) { applyUpdate(); return; }
+  $('update-bar').hidden = false;
 }
 
 // ---------- emoji: Animated Fluent set ----------
@@ -5989,6 +6025,7 @@ function bindUi() {
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) { checkUpdate(); clearTimeout(pickLockTimer); pickingUntil = 0; }
     if (document.hidden) lockSoon();
+    if (document.hidden && updateOffered && !updateBlocked()) applyUpdate(); // it locks anyway: nothing is lost
     evaluateShield();
     if (!document.hidden && !locked) { unread = 0; updateTitle(); }
   });
