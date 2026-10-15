@@ -1,0 +1,28 @@
+[Unit]
+Description=Keep Cloudflare AAAA records on this server's current IPv6
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/najva-cf.env
+ExecStart=/usr/bin/python3 /usr/local/lib/najva/najva-ddns.py
+# Readable copy of the status for the admin panel (the state dir is under
+# /var/lib/private, which only root can enter). Runs as root, also on failure.
+ExecStopPost=+/bin/sh -c 'install -m 644 /var/lib/private/najva-ddns/status.json /run/najva-ddns-status.json 2>/dev/null || true'
+DynamicUser=yes
+StateDirectory=najva-ddns
+StateDirectoryMode=0755
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native

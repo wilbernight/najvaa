@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#0b0d12">
+<meta name="description" content="نجوا — گفتگو و تماس دونفره با رمزنگاری سرتاسری و حذف خودکار پیام‌ها">
+<title>نجوا</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="/fonts/Vazirmatn.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/style.css">
+<script type="module" src="/app.js"></script>
+</head>
+<body>
+
+<svg width="0" height="0" class="sprite" aria-hidden="true">
+  <defs>
+    <linearGradient id="g-brand" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c5cff"/><stop offset="1" stop-color="#3b82f6"/></linearGradient>
+  </defs>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2.5"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 19 6v6c0 4.5-3 7.6-7 9-4-1.4-7-4.5-7-9V6z"/><path d="m9 12 2.2 2.2L15.5 10"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><path d="M21.5 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 1.6 4.2 2 2 0 0 1 3.6 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L7.5 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.9 2.1z"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4" class="fill"/><circle cx="12" cy="12" r="1.4" class="fill"/><circle cx="12" cy="19" r="1.4" class="fill"/></symbol>
+  <symbol id="i-smile" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"/><path d="M8 14.2s1.5 2 4 2 4-2 4-2M9 9.5h.01M15 9.5h.01"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="m21 11.5-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M3.4 20.4 21 12 3.4 3.6l2.3 8.4z"/><path d="M5.7 12H13"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2.5" width="6" height="11.5" rx="3"/><path d="M18.5 10.5v.5a6.5 6.5 0 0 1-13 0v-.5M12 17.5v4"/></symbol>
+  <symbol id="i-mic-off" viewBox="0 0 24 24"><path d="M15 9.3V5.5a3 3 0 0 0-5.7-1.3M9 9v2a3 3 0 0 0 5.1 2.1M18.5 10.5v.5a6.5 6.5 0 0 1-.9 3.3M5.5 10.5v.5a6.5 6.5 0 0 0 10.6 5M12 17.5v4M3 3l18 18"/></symbol>
+  <symbol id="i-speaker" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11"/></symbol>
+  <symbol id="i-timer"viewBox="0 0 24 24"><circle cx="12" cy="13.5" r="7.5"/><path d="M12 10v3.5l2 2M9.5 2.5h5"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M15 9V5.5A2.5 2.5 0 0 0 12.5 3h-7A2.5 2.5 0 0 0 3 5.5v7A2.5 2.5 0 0 0 5.5 15H9"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3.5 6h17M9 6V4h6v2M18.5 6l-.9 13.1a2 2 0 0 1-2 1.9H8.4a2 2 0 0 1-2-1.9L5.5 6"/></symbol>
+  <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5.5A2.5 2.5 0 0 1 3 18.5v-13A2.5 2.5 0 0 1 5.5 3H9M16 17l5-5-5-5M21 12H9"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15.5-5-5L5 21"/></symbol>
+  <symbol id="i-video" viewBox="0 0 24 24"><rect x="2.5" y="5.5" width="14" height="13" rx="2.5"/><path d="m16.5 10 5-3v10l-5-3"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2.5H6.5A2.5 2.5 0 0 0 4 5v14a2.5 2.5 0 0 0 2.5 2.5h11A2.5 2.5 0 0 0 20 19V8.5z"/><path d="M14 2.5v6h6"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v3.5a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 18.5V15M7 10l5 5 5-5M12 15V3"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-checks" viewBox="0 0 24 24"><path d="M17 6 6.5 16.5 2 12"/><path d="m22 6-10.5 10.5-1.3-1.3"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12.5-7.5z" class="fill"/></symbol>
+  <symbol id="i-insta" viewBox="0 0 24 24"><rect x="2.5" y="2.5" width="19" height="19" rx="5.5"/><circle cx="12" cy="12" r="4.2"/><path d="M17.4 6.6h.01"/></symbol>
+  <symbol id="i-react" viewBox="0 0 24 24"><path d="M21.4 11.2A9.5 9.5 0 1 1 12.8 2.5"/><path d="M8 14.2s1.5 2 4 2 4-2 4-2M9 9.5h.01M15 9.5h.01M16 4.5h6M19 1.5v6"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5"/><path d="m11 12 10-10M16 7l3 3M18.5 4.5l2 2"/></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M10 4.2a9.7 9.7 0 0 1 2-.2c6.5 0 9.5 8 9.5 8a14 14 0 0 1-1.8 2.8M6.6 6.6A13.4 13.4 0 0 0 2.5 12s3 8 9.5 8a9.4 9.4 0 0 0 5.4-1.6M3 3l18 18M9.9 9.9a3 3 0 0 0 4.2 4.2"/></symbol>
+  <symbol id="i-hand" viewBox="0 0 24 24"><path d="M18 11V6.5a1.5 1.5 0 0 0-3 0V11M15 10.5V4.5a1.5 1.5 0 0 0-3 0v6M12 10.5V5.5a1.5 1.5 0 0 0-3 0V13M18 8.5a1.5 1.5 0 0 1 3 0V14a8 8 0 0 1-8 8h-1.3a8 8 0 0 1-5.6-2.3L3.4 17a1.6 1.6 0 0 1 2.3-2.3L9 18"/></symbol>
+  <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></symbol>
+  <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="7.5" rx="2"/><rect x="3" y="13.5" width="18" height="7.5" rx="2"/><path d="M7 6.8h.01M7 17.2h.01"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M19 12H5M11 18l-6-6 6-6"/></symbol>
+  <symbol id="i-reply" viewBox="0 0 24 24"><path d="M9 17l-5-5 5-5"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8.3M21 3v5.3h-5.3M21 12a9 9 0 0 1-15.5 6.2L3 15.7M3 21v-5.3h5.3"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12s3.5-7.5 9.5-7.5 9.5 7.5 9.5 7.5-3.5 7.5-9.5 7.5S2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-message" viewBox="0 0 24 24"><path d="M21 12a8.5 8.5 0 0 1-12.6 7.4L3 21l1.6-5.4A8.5 8.5 0 1 1 21 12z"/></symbol>
+  <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4.5" width="4" height="15" rx="1.2" class="fill"/><rect x="14" y="4.5" width="4" height="15" rx="1.2" class="fill"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="M5 5v14l10-7z" class="fill"/><path d="M19 5v14"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 24 24"><path d="M19 5v14L9 12z" class="fill"/><path d="M5 5v14"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 16.5V22M8.5 3h7l-1 6.5 3.5 3.5V15H6v-2l3.5-3.5z"/></symbol>
+  <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></symbol>
+  <symbol id="i-repeat" viewBox="0 0 24 24"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></symbol>
+  <symbol id="i-hash" viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/></symbol>
+</svg>
+
+<!-- ================= Landing ================= -->
+<main id="home" class="screen landing" hidden>
+  <div class="landing-glow" aria-hidden="true"></div>
+  <div class="landing-inner">
+    <div class="brand">
+      <div class="brand-mark"><svg class="i"><use href="#i-lock"/></svg></div>
+      <span class="brand-name">نجوا</span>
+    </div>
+    <h1 class="hero-title">گفتگوی خصوصی،<br><span class="grad">واقعاً خصوصی.</span></h1>
+    <p class="hero-sub">پیام، عکس، ویدیو و تماس صوتی دونفره با رمزنگاری سرتاسری. کلیدها فقط روی دستگاه شما ساخته می‌شوند؛ سرور فقط نسخه‌ی رمزشده را نگه می‌دارد و هیچ‌چیز را نمی‌بیند.</p>
+
+    <div class="panel step" id="choose-step">
+      <button id="go-create" class="btn btn-primary btn-lg wide"><svg class="i"><use href="#i-sparkle"/></svg> ساخت اتاق جدید</button>
+      <button id="go-join" class="btn btn-soft btn-lg wide"><svg class="i"><use href="#i-hash"/></svg> ورود با کد اتاق</button>
+    </div>
+
+    <form class="panel step" id="create-step" hidden novalidate>
+      <button type="button" class="back" data-back><svg class="i"><use href="#i-arrow"/></svg> بازگشت</button>
+      <div class="field-label code-label">کد اتاق شما</div>
+      <div class="code-display">
+        <span id="new-code" dir="ltr">--- ----</span>
+        <button type="button" id="regen-btn" class="btn-icon sm" title="کد دیگر" aria-label="ساخت کد دیگر"><svg class="i"><use href="#i-refresh"/></svg></button>
+      </div>
+      <p class="help"><svg class="i"><use href="#i-message"/></svg> این کد را پیامک کنید؛ رمز را جداگانه (حضوری یا تلفنی) بگویید.</p>
+      <label for="new-pass" class="field-label">رمز اتاق</label>
+      <div class="field">
+        <svg class="i"><use href="#i-key"/></svg>
+        <input id="new-pass" type="password" autocomplete="new-password" placeholder="حداقل ۶ کاراکتر — هرچه طولانی‌تر، امن‌تر">
+        <button type="button" class="btn-icon sm eye" data-eye="new-pass" aria-label="نمایش رمز"><svg class="i"><use href="#i-eye"/></svg></button>
+      </div>
+      <div class="strength"><i id="strength-bar"></i></div>
+      <div id="strength-text" class="strength-text">رمز قوی، کلید اصلی امنیت اتاق است</div>
+      <label for="new-name" class="field-label">نام این دستگاه <span class="opt">اختیاری</span></label>
+      <div class="field">
+        <svg class="i"><use href="#i-user"/></svg>
+        <input id="new-name" maxlength="30" autocomplete="off" placeholder="مثلاً: موبایل سارا یا لپ‌تاپ علی">
+      </div>
+      <div id="create-error" class="form-error" hidden></div>
+      <button class="btn btn-primary btn-lg wide">ساخت و ورود <svg class="i"><use href="#i-arrow"/></svg></button>
+    </form>
+
+    <form class="panel step" id="join-step" hidden novalidate>
+      <button type="button" class="back" data-back><svg class="i"><use href="#i-arrow"/></svg> بازگشت</button>
+      <label for="join-code" class="field-label">کد ۷ رقمی اتاق</label>
+      <input id="join-code" class="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="•••••••" dir="ltr">
+      <div id="join-error" class="form-error" hidden></div>
+      <button class="btn btn-primary btn-lg wide">ادامه <svg class="i"><use href="#i-arrow"/></svg></button>
+    </form>
+
+    <form class="panel step" id="pass-step" hidden novalidate>
+      <button type="button" class="back" data-back="join"><svg class="i"><use href="#i-arrow"/></svg> تغییر کد</button>
+      <div class="room-chip"><svg class="i"><use href="#i-hash"/></svg> اتاق <b id="pass-code" dir="ltr"></b></div>
+      <label for="join-pass" class="field-label">رمز اتاق</label>
+      <div class="field">
+        <svg class="i"><use href="#i-lock"/></svg>
+        <input id="join-pass" type="password" autocomplete="off" placeholder="رمزی که طرف مقابل به شما گفته">
+        <button type="button" class="btn-icon sm eye" data-eye="join-pass" aria-label="نمایش رمز"><svg class="i"><use href="#i-eye"/></svg></button>
+      </div>
+      <label for="join-name" class="field-label">نام این دستگاه <span class="opt">اختیاری</span></label>
+      <div class="field">
+        <svg class="i"><use href="#i-user"/></svg>
+        <input id="join-name" maxlength="30" autocomplete="off" placeholder="مثلاً: موبایل سارا یا لپ‌تاپ علی">
+      </div>
+      <div id="pass-error" class="form-error" hidden></div>
+      <button class="btn btn-primary btn-lg wide">ورود به اتاق <svg class="i"><use href="#i-arrow"/></svg></button>
+    </form>
+
+    <div class="features">
+      <div class="feature"><svg class="i"><use href="#i-shield"/></svg><div><b>رمزنگاری سرتاسری</b><span><bdi class="latin">X25519 + AES-256-GCM</bdi> با چرخش مداوم کلید</span></div></div>
+      <div class="feature"><svg class="i"><use href="#i-timer"/></svg><div><b>حذف پس از خواندن</b><span>زمان‌سنج از لحظه‌ی دیده شدن پیام شروع می‌شود</span></div></div>
+      <div class="feature"><svg class="i"><use href="#i-server"/></svg><div><b>ذخیره‌ی رمزشده</b><span>فقط با کد و رمز اتاق باز می‌شود؛ بعد از ۳ ماه خودکار پاک می‌شود</span></div></div>
+    </div>
+  </div>
+</main>
+
+
+<main id="busy" class="screen landing" hidden>
+  <div class="landing-glow" aria-hidden="true"></div>
+  <div class="busy-box">
+    <div class="orbit"><svg class="i"><use href="#i-lock"/></svg></div>
+    <p id="busy-text">در حال ساخت کلیدهای رمزنگاری…</p>
+  </div>
+</main>
+
+<!-- ================= Chat ================= -->
+<main id="chat" class="screen" hidden>
+  <header class="topbar">
+    <div class="peer">
+      <div class="avatar-sm"><svg class="i"><use href="#i-user"/></svg><span id="status-dot" class="presence"></span></div>
+      <div class="peer-text">
+        <div class="peer-name"><span id="peer-title" class="peer-title">مخاطب امن</span> <span id="room-tag" class="room-tag" dir="ltr"></span></div>
+        <div id="status-text" class="peer-status">در حال اتصال…</div>
+      </div>
+    </div>
+    <div class="top-actions">
+      <button id="ttl-btn" class="chip" title="زمان حذف پس از خواندن"><svg class="i"><use href="#i-timer"/></svg><span id="ttl-label">بدون حذف</span></button>
+      <button id="music-btn" class="btn-icon" title="ماندگارها" aria-label="ماندگارها"><svg class="i"><use href="#i-music"/></svg></button>
+      <button id="call-btn" class="btn-icon" title="تماس صوتی" aria-label="تماس صوتی" disabled><svg class="i"><use href="#i-phone"/></svg></button>
+      <button id="menu-btn" class="btn-icon" title="بیشتر" aria-label="بیشتر"><svg class="i"><use href="#i-more"/></svg></button>
+    </div>
+  </header>
+
+  <div id="ttl-menu" class="popover ttl-pop" hidden>
+    <div class="pop-title">حذف خودکار پس از خواندن</div>
+    <button data-ttl="0">بدون حذف خودکار</button>
+    <button data-ttl="10">۱۰ ثانیه</button>
+    <button data-ttl="30">۳۰ ثانیه</button>
+    <button data-ttl="60">۱ دقیقه</button>
+    <button data-ttl="300">۵ دقیقه</button>
+    <button data-ttl="1800">۳۰ دقیقه</button>
+    <button data-ttl="3600">۱ ساعت</button>
+  </div>
+
+  <div id="menu" class="popover menu-pop" hidden>
+    <button data-act="safety"><svg class="i"><use href="#i-shield"/></svg> کد امنیتی جلسه</button>
+    <button data-act="copy"><svg class="i"><use href="#i-copy"/></svg> کپی کد اتاق <b id="menu-code" class="menu-code" dir="ltr"></b></button>
+    <button data-act="lock"><svg class="i"><use href="#i-lock"/></svg> قفل کردن الان</button>
+    <button data-act="preview"><svg class="i"><use href="#i-insta"/></svg> <span id="preview-toggle">پیش‌نمایش اینستاگرام</span><span id="preview-switch" class="switch on"></span></button>
+    <hr>
+    <button data-act="manage"><svg class="i"><use href="#i-server"/></svg> مدیریت محتوا</button>
+    <button data-act="veil"><svg class="i"><use href="#i-eye-off"/></svg> <span>متن محرمانه (ضد زوم)</span><span id="veil-switch" class="switch on"></span></button>
+    <button data-act="notify"><svg class="i"><use href="#i-message"/></svg> <span>اعلان پیام جدید</span><span id="notify-switch" class="switch"></span></button>
+    <button data-act="voicefx"><svg class="i"><use href="#i-sparkle"/></svg> <span>صدای ناشناس (تماس رباتیک، ویس با صدای هوش مصنوعی)</span><span id="voicefx-switch" class="switch"></span></button>
+    <button data-act="clear"><svg class="i"><use href="#i-trash"/></svg> پاک کردن گفتگو برای همه</button>
+    <button data-act="leave" class="danger"><svg class="i"><use href="#i-logout"/></svg> خروج از اتاق</button>
+  </div>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <div class="stream">
+    <div id="empty-state" class="empty">
+      <div class="empty-badge"><svg class="i"><use href="#i-lock"/></svg></div>
+      <h2>این گفتگو سرتاسری رمز شده است</h2>
+      <p>هیچ‌کس جز شما دو نفر — حتی سرور — نمی‌تواند پیام‌ها و تماس‌ها را بخواند یا بشنود. پیام‌ها رمزشده روی سرور می‌مانند تا وقتی «پاک کردن برای همه» را بزنید یا زمان‌سنج حذف را روشن کنید.</p>
+      <div id="share-card" class="share-card" hidden>
+        <div class="share-label">کد اتاق را برای مخاطب بفرستید</div>
+        <div id="share-code" class="share-code" dir="ltr"></div>
+        <div class="share-actions">
+          <a id="sms-btn" class="btn btn-primary btn-sm"><svg class="i"><use href="#i-message"/></svg> ارسال با پیامک</a>
+          <button id="copy-code-btn" type="button" class="btn btn-ghost btn-sm"><svg class="i"><use href="#i-copy"/></svg> کپی کد</button>
+        </div>
+        <div class="share-note">رمز را در پیامک ننویسید؛ جداگانه بگویید.</div>
+      </div>
+      <div class="empty-tips">
+        <span><svg class="i"><use href="#i-hand"/></svg> عکس و ویدیو: با دو انگشت نگه دارید</span>
+        <span><svg class="i"><use href="#i-eye-off"/></svg> برای خواندن، روی پیام نگه دارید</span>
+        <span><svg class="i"><use href="#i-react"/></svg> دو بار ضربه برای ❤️</span>
+        <span><svg class="i"><use href="#i-reply"/></svg> برای پاسخ، پیام را به چپ بکشید</span>
+        <span><svg class="i"><use href="#i-mic"/></svg> برای ویس، میکروفون را نگه دارید</span>
+      </div>
+    </div>
+    <ol id="messages" aria-live="polite"></ol>
+    <button id="to-bottom" class="to-bottom" type="button" aria-label="رفتن به آخرین پیام" hidden><svg class="i"><use href="#i-arrow"/></svg><b id="to-bottom-n" class="to-bottom-n" hidden></b></button>
+  </div>
+  <div id="typing" class="typing" hidden><span></span><span></span><span></span></div>
+
+  <div class="composer-wrap">
+    <div id="mini-player" class="mini-player" hidden>
+      <button id="mp-open" type="button" class="mp-info"><span class="mp-eq"><i></i><i></i><i></i></span><span id="mp-title"></span></button>
+      <div class="mp-ctrls" dir="ltr">
+        <button id="mp-prev" type="button" class="btn-icon sm" aria-label="قبلی"><svg class="i"><use href="#i-prev"/></svg></button>
+        <button id="mp-play" type="button" class="btn-icon sm" aria-label="پخش/توقف"></button>
+        <button id="mp-next" type="button" class="btn-icon sm" aria-label="بعدی"><svg class="i"><use href="#i-next"/></svg></button>
+        <button id="mp-close" type="button" class="btn-icon sm" aria-label="بستن پخش"><svg class="i"><use href="#i-x"/></svg></button>
+      </div>
+      <div class="mp-progress"><i id="mp-bar"></i></div>
+    </div>
+    <div id="emoji-panel" class="emoji-panel" hidden></div>
+    <div id="gif-panel" class="emoji-panel gif-panel" hidden>
+      <form id="gif-form" class="gif-search">
+        <input id="gif-q" maxlength="50" autocomplete="off" placeholder="جستجوی گیف (انگلیسی نتیجه‌ی بهتری دارد)…">
+        <button class="btn-icon sm" aria-label="جستجو"><svg class="i"><use href="#i-arrow"/></svg></button>
+      </form>
+      <div id="gif-topics" class="gif-topics"></div>
+      <div id="gif-grid" class="gif-grid"></div>
+      <div class="gif-foot">GIPHY + Tenor · از طریق سرور، بدون دیده شدن دستگاه شما</div>
+    </div>
+    <div id="upload-hint" class="upload-hint" hidden></div>
+    <div id="reply-bar" class="reply-bar" hidden></div>
+    <form id="composer" class="composer">
+      <div class="input-shell">
+        <button type="button" id="emoji-btn" class="btn-icon sm" aria-label="ایموجی"><svg class="i"><use href="#i-smile"/></svg></button>
+        <button type="button" id="gif-btn" class="gif-btn" aria-label="گیف">GIF</button>
+        <textarea id="input" rows="1" maxlength="4000" placeholder="پیام رمزشده…" autocomplete="off"></textarea>
+        <button type="button" id="attach-btn" class="btn-icon sm" aria-label="ارسال عکس، ویدیو یا فایل"><svg class="i"><use href="#i-clip"/></svg></button>
+      </div>
+      <div id="rec-bar" class="rec-bar" hidden>
+        <button type="button" id="rec-cancel" class="btn-icon sm rec-cancel" aria-label="لغو پیام صوتی"><svg class="i"><use href="#i-trash"/></svg></button>
+        <span class="rec-dot" aria-hidden="true"></span>
+        <span id="rec-time" class="rec-time" dir="ltr">0:00</span>
+        <span id="rec-fx" class="rec-fx" hidden><svg class="i"><use href="#i-sparkle"/></svg>صدای ناشناس</span>
+        <div id="rec-level" class="rec-level" aria-hidden="true"></div>
+        <span id="rec-hint" class="rec-hint"></span>
+      </div>
+      <button id="send-btn" class="send" aria-label="ارسال"><svg class="i"><use href="#i-send"/></svg></button>
+      <button type="button" id="mic-btn" class="send mic" aria-label="ضبط پیام صوتی"><svg class="i"><use href="#i-mic"/></svg></button>
+      <input id="file-input" type="file" multiple hidden>
+    </form>
+  </div>
+  <div id="drop-zone" class="drop-zone" hidden><div><svg class="i"><use href="#i-image"/></svg>رها کنید تا رمزشده ارسال شود</div></div>
+</main>
+
+<div id="react-bar" class="react-bar" hidden></div>
+
+<div id="ig-modal" class="modal" hidden>
+  <div class="modal-card ig-modal-card" role="dialog" aria-modal="true" aria-label="پست اینستاگرام">
+    <div class="igm-head">
+      <div><div id="igm-kind" class="igm-kind"></div><div id="igm-from" class="igm-from"></div></div>
+      <button id="igm-close" type="button" class="btn-icon sm" aria-label="بستن"><svg class="i"><use href="#i-x"/></svg></button>
+    </div>
+    <div id="igm-media" class="igm-media"></div>
+    <div id="igm-title" class="igm-title"></div>
+    <div id="igm-replies" class="igm-replies" hidden></div>
+    <div id="igm-note" class="igm-note" hidden></div>
+    <div class="igm-label">ری‌اکشن شما</div>
+    <div id="igm-reacts" class="igm-reacts"></div>
+    <form id="igm-form" class="igm-form">
+      <input id="igm-text" maxlength="500" autocomplete="off" placeholder="یک پیام هم بنویسید (اختیاری)…">
+      <button class="send sm" aria-label="ارسال پاسخ"><svg class="i"><use href="#i-send"/></svg></button>
+    </form>
+    <div id="igm-peer" class="igm-peer" hidden></div>
+    <div id="igm-nav" class="igm-nav" hidden>
+      <button id="igm-prev" type="button" class="btn-icon" aria-label="قبلی"><svg class="i flip"><use href="#i-arrow"/></svg></button>
+      <div class="igm-mid"><div id="igm-count" class="igm-count"></div><div id="igm-dots" class="igm-dots"></div></div>
+      <button id="igm-next" type="button" class="btn-icon" aria-label="بعدی"><svg class="i"><use href="#i-arrow"/></svg></button>
+    </div>
+    <a id="igm-open" class="btn btn-soft wide" target="_blank" rel="noopener noreferrer"><svg class="i"><use href="#i-insta"/></svg> باز کردن در اینستاگرام</a>
+  </div>
+</div>
+
+<div id="music-modal" class="modal" hidden>
+  <div class="modal-card music-card" role="dialog" aria-modal="true" aria-label="ماندگارها">
+    <div class="igm-head">
+      <div><div class="igm-kind">ماندگارها</div><div id="lib-count" class="igm-from"></div></div>
+      <button id="music-close" type="button" class="btn-icon sm" aria-label="بستن"><svg class="i"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="seg" role="tablist">
+      <button id="tab-music" type="button" class="active">موزیک</button>
+      <button id="tab-media" type="button">عکس و ویدیو</button>
+    </div>
+    <div id="music-pane">
+      <div class="np">
+        <div class="np-art"><svg class="i"><use href="#i-music"/></svg></div>
+        <div id="np-title" class="np-title"></div>
+        <input id="np-seek" type="range" min="0" max="1000" value="0" dir="ltr" aria-label="جابه‌جایی">
+        <div class="np-times" dir="ltr"><span id="np-cur">0:00</span><span id="np-dur">0:00</span></div>
+        <div class="np-ctrls" dir="ltr">
+          <button id="np-shuffle" type="button" class="btn-icon" aria-label="پخش تصادفی"><svg class="i"><use href="#i-shuffle"/></svg></button>
+          <button id="np-prev" type="button" class="btn-icon" aria-label="قبلی"><svg class="i"><use href="#i-prev"/></svg></button>
+          <button id="np-play" type="button" class="np-main" aria-label="پخش/توقف"></button>
+          <button id="np-next" type="button" class="btn-icon" aria-label="بعدی"><svg class="i"><use href="#i-next"/></svg></button>
+          <button id="np-repeat" type="button" class="btn-icon" aria-label="تکرار"><svg class="i"><use href="#i-repeat"/></svg></button>
+        </div>
+      </div>
+      <div class="lib-actions">
+        <button id="lib-playall" type="button" class="btn btn-primary btn-sm"><svg class="i"><use href="#i-play"/></svg> پخش همه پشت سر هم</button>
+      </div>
+      <ol id="lib-list" class="lib-list"></ol>
+      <p id="lib-empty" class="lib-empty">هنوز موزیکی ماندگار نشده. روی دکمه‌ی «ماندگار» کنار هر موزیکِ داخل گفتگو بزنید.</p>
+    </div>
+    <div id="media-pane" hidden>
+      <p class="g-hint"><svg class="i"><use href="#i-hand"/></svg> برای دیدن، با دو انگشت نگه دارید</p>
+      <div id="gallery" class="gallery"></div>
+      <p id="gallery-empty" class="lib-empty">هنوز عکس یا ویدیویی ماندگار نشده. در گفتگو روی عکس یا ویدیو با یک انگشت نگه دارید و «ماندگار کردن» را بزنید.</p>
+    </div>
+    <button id="lib-wipe" type="button" class="btn-link wipe-link">حذف همه‌ی ماندگارهای این اتاق از این دستگاه</button>
+    <p class="lib-note"><svg class="i"><use href="#i-lock"/></svg> رمزشده و فقط روی همین دستگاه؛ فقط با کد و رمز همین اتاق باز می‌شود. روی سرور چیزی ذخیره نمی‌شود.</p>
+  </div>
+</div>
+
+<div id="manage-modal" class="modal" hidden>
+  <div class="modal-card manage-card" role="dialog" aria-modal="true" aria-label="مدیریت محتوا">
+    <div class="igm-head">
+      <div><div class="igm-kind">مدیریت محتوا</div><div id="mg-sub" class="igm-from"></div></div>
+      <button id="mg-close" type="button" class="btn-icon sm" aria-label="بستن"><svg class="i"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="mg-usage">
+      <div class="mg-row"><span>این گفتگو روی سرور</span><b id="mg-room">—</b></div>
+      <div class="mg-row small"><span>کل فضای سرور</span><span id="mg-total" dir="rtl">—</span></div>
+      <div class="mg-track"><i id="mg-bar"></i></div>
+      <p class="mg-note"><svg class="i"><use href="#i-timer"/></svg> محتوای قدیمی‌تر از ۳ ماه خودکار پاک می‌شود؛ اگر کل سرور از ۵۰ گیگابایت بیشتر شود، قدیمی‌ترین‌ها زودتر پاک می‌شوند.</p>
+    </div>
+    <div id="mg-filter" class="seg mg-seg">
+      <button data-f="all" class="active">همه</button>
+      <button data-f="text">متن</button>
+      <button data-f="image">عکس</button>
+      <button data-f="video">ویدیو</button>
+      <button data-f="audio">موزیک</button>
+      <button data-f="voice">ویس</button>
+      <button data-f="file">فایل</button>
+      <button data-f="ig">اینستا</button>
+    </div>
+    <div class="mg-tools"><label><input id="mg-all" type="checkbox"> انتخاب همه</label><span id="mg-count"></span></div>
+    <ol id="mg-list" class="mg-list"></ol>
+    <p id="mg-empty" class="lib-empty" hidden>چیزی برای نمایش نیست.</p>
+    <button id="mg-del" type="button" class="btn btn-danger wide" disabled><svg class="i"><use href="#i-trash"/></svg> حذف انتخاب‌شده‌ها برای همه</button>
+  </div>
+</div>
+
+<div id="keep-sheet" class="sheet" hidden>
+  <div class="sheet-card">
+    <div id="keep-title" class="sheet-title"></div>
+    <button id="keep-do" type="button" class="sheet-btn"><svg class="i"><use href="#i-pin"/></svg><span>ماندگار کردن در این دستگاه</span></button>
+    <button id="keep-cancel" type="button" class="sheet-btn muted">انصراف</button>
+    <p class="sheet-note">ماندگار کردن به طرف مقابل اطلاع داده می‌شود. برای دیدن، با دو انگشت نگه دارید.</p>
+  </div>
+</div>
+
+<div id="viewer" class="viewer" hidden></div>
+<form id="lock" class="lock" hidden novalidate>
+  <div class="landing-glow" aria-hidden="true"></div>
+  <div class="lock-box">
+    <div class="lock-icon"><svg class="i"><use href="#i-lock"/></svg></div>
+    <h2>نجوا قفل است</h2>
+    <p>برای ادامه، رمز اتاق <b id="lock-code" dir="ltr"></b> را وارد کنید.</p>
+    <div id="lock-call" class="lock-call" hidden><svg class="i"><use href="#i-phone"/></svg> <span>تماس در جریان است</span></div>
+    <div class="field">
+      <svg class="i"><use href="#i-key"/></svg>
+      <input id="lock-pass" type="password" autocomplete="off" placeholder="رمز اتاق">
+      <button type="button" class="btn-icon sm eye" data-eye="lock-pass" aria-label="نمایش رمز"><svg class="i"><use href="#i-eye"/></svg></button>
+    </div>
+    <div id="lock-error" class="form-error" hidden></div>
+    <button id="lock-btn" class="btn btn-primary btn-lg wide">باز کردن</button>
+    <button id="lock-leave" type="button" class="btn-link">خروج و پاک‌سازی کامل</button>
+  </div>
+</form>
+
+<div id="shield" class="shield" hidden><div><svg class="i"><use href="#i-eye-off"/></svg><b>محتوا پنهان شد</b><span>برای نمایش، به این پنجره برگردید</span></div></div>
+
+<!-- ================= Call ================= -->
+<div id="call" class="call" hidden>
+  <div class="call-bg" aria-hidden="true"></div>
+  <div class="call-top"><svg class="i"><use href="#i-lock"/></svg><span id="call-crypto">رمزنگاری سرتاسری</span></div>
+  <div class="call-center">
+    <div class="call-avatar"><span class="ring r1"></span><span class="ring r2"></span><div class="face"><svg class="i"><use href="#i-user"/></svg></div></div>
+    <div class="call-name">مخاطب امن</div>
+    <div id="call-state" class="call-state">در حال تماس…</div>
+    <div id="call-timer" class="call-timer" hidden>00:00</div>
+    <div id="call-fx" class="call-fx" hidden><svg class="i"><use href="#i-sparkle"/></svg>صدای ناشناس فعال است</div>
+  </div>
+  <div class="call-actions">
+    <button id="mute-btn" class="round glass" hidden aria-label="قطع میکروفون"><svg class="i"><use href="#i-mic"/></svg></button>
+    <button id="speaker-btn" class="round glass" hidden aria-label="بلندگو" aria-pressed="false" title="بلندگو"><svg class="i"><use href="#i-speaker"/></svg></button>
+    <button id="hangup-btn" class="round danger" aria-label="قطع تماس"><svg class="i hang"><use href="#i-phone"/></svg></button>
+    <button id="accept-btn" class="round success" hidden aria-label="پاسخ"><svg class="i"><use href="#i-phone"/></svg></button>
+  </div>
+</div>
+
+<dialog id="safety" class="dialog">
+  <div class="dialog-icon"><svg class="i"><use href="#i-shield"/></svg></div>
+  <h2>کد امنیتی این جلسه</h2>
+  <p id="safety-code" class="code" dir="ltr"></p>
+  <p class="muted">این کد را با طرف مقابل (مثلاً داخل تماس صوتی) مقایسه کنید. اگر یکی بود، هیچ‌کس — حتی سرور یا مدیر آن — بین شما قرار نگرفته است. با هر اتصال دوباره، کد عوض می‌شود.</p>
+  <p id="safety-meta" class="meta-line"></p>
+  <form method="dialog"><button class="btn btn-primary wide">متوجه شدم</button></form>
+</dialog>
+
+<dialog id="confirm-dlg" class="dialog confirm-dlg">
+  <div id="cf-icon" class="dialog-icon"><svg class="i"><use href="#i-alert"/></svg></div>
+  <h2 id="cf-title"></h2>
+  <p id="cf-text" class="cf-text"></p>
+  <div class="cf-actions">
+    <button id="cf-cancel" type="button" class="btn btn-soft">انصراف</button>
+    <button id="cf-ok" type="button" class="btn btn-danger"></button>
+  </div>
+</dialog>
+
+<dialog id="aiv-dlg" class="dialog confirm-dlg aiv-dlg">
+  <div class="dialog-icon"><svg class="i"><use href="#i-sparkle"/></svg></div>
+  <h2>صدای هوش مصنوعی</h2>
+  <p class="cf-text">این متن با صدای خانم هوش مصنوعی خوانده و به‌جای صدای شما فرستاده می‌شود. اگر کلمه‌ای اشتباه شنیده شده، اصلاحش کنید.</p>
+  <textarea id="aiv-text" class="aiv-text" rows="4" dir="rtl" maxlength="600" placeholder="متنی برای خواندن بنویسید" aria-label="متن پیام صوتی"></textarea>
+  <div class="cf-actions">
+    <button id="aiv-cancel" type="button" class="btn btn-soft">انصراف</button>
+    <button id="aiv-ok" type="button" class="btn btn-primary">ساخت و ارسال</button>
+  </div>
+</dialog>
+
+<audio id="remote-audio" autoplay></audio>
+<div id="toast" class="toast" hidden></div>
+</body>
+</html>

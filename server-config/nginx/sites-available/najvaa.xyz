@@ -1,0 +1,132 @@
+map $http_upgrade $najva_connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+# Plain HTTP never serves content: only a redirect to HTTPS.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name najvaa.xyz www.najvaa.xyz;
+    access_log off;
+    return 301 https://najvaa.xyz$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    include snippets/najvaa-origin.conf;
+    server_name najvaa.xyz;
+
+    root /var/www/najvaa.xyz/public;
+    index index.html;
+
+    # Privacy: no access log for the chat (no IPs, no timestamps).
+    access_log off;
+    error_log  /var/log/nginx/najvaa.xyz-error.log crit;
+    server_tokens off;
+    client_max_body_size 1M;
+
+    add_header Content-Security-Policy "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' wss://najvaa.xyz; worker-src 'self' blob:; font-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Permissions-Policy "microphone=(self), camera=(), geolocation=(), payment=(), usb=()" always;
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
+    # Cross-origin isolation: lets the on-device AI voice use several threads.
+    add_header Cross-Origin-Embedder-Policy "require-corp" always;
+    add_header Cross-Origin-Resource-Policy "same-origin" always;
+    add_header Cache-Control "no-store" always;
+
+    location = /ws {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $najva_connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header Origin $http_origin;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+    }
+
+    location = /preview {
+        limit_except POST { deny all; }
+        client_max_body_size 8k;
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Origin $http_origin;
+        proxy_read_timeout 30s;
+    }
+
+    # Encrypted room history (ciphertext only; see relay.js).
+    location ^~ /h/ {
+        limit_except GET POST PUT { deny all; }
+        client_max_body_size 1m;
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Origin $http_origin;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+    }
+
+    location ^~ /gif/ {
+        limit_except GET POST { deny all; }
+        client_max_body_size 4k;
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Origin $http_origin;
+        proxy_set_header Sec-Fetch-Site $http_sec_fetch_site;
+        proxy_read_timeout 20s;
+    }
+
+    # The female-voice filter module: every client fetches it once at start and
+    # keeps it cached, so loading it never marks who uses the feature.
+    # (add_header here replaces the server-level ones, so the needed ones are repeated.)
+    location = /voicefx-worklet.js {
+        add_header Cache-Control "public, max-age=86400" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Cross-Origin-Resource-Policy "same-origin" always;
+        try_files $uri =404;
+    }
+
+    # On-device AI voice models (speech recognition + TTS). Versioned path, so
+    # cached for a year; fetched only by those who use the AI voice.
+    location ^~ /ai/ {
+        types {
+            application/wasm wasm;
+            text/javascript js mjs;
+            application/json json;
+            application/octet-stream onnx gz;
+        }
+        gzip off;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Cross-Origin-Resource-Policy "same-origin" always;
+        add_header Cross-Origin-Embedder-Policy "require-corp" always;
+        try_files $uri =404;
+    }
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    location ~ /\. {
+        deny all;
+    }
+}
+
+# www.najvaa.xyz -> najvaa.xyz
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    include snippets/najvaa-origin.conf;
+    server_name www.najvaa.xyz;
+    access_log off;
+    return 301 https://najvaa.xyz$request_uri;
+}

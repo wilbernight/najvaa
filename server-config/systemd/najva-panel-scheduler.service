@@ -1,0 +1,21 @@
+[Unit]
+Description=Najva admin panel scheduler (sync, health, domains)
+
+[Service]
+Type=oneshot
+User=najvapanel
+Group=najvapanel
+WorkingDirectory=/var/www/mod.najvaa.xyz
+ExecStart=/usr/bin/php artisan schedule:run --no-interaction
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/www/mod.najvaa.xyz/storage /var/www/mod.najvaa.xyz/database /var/www/mod.najvaa.xyz/bootstrap/cache
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=

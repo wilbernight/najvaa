@@ -1,0 +1,10 @@
+[Unit]
+Description=Check the server's IPv6 for Cloudflare every 5 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

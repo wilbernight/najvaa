@@ -1,0 +1,34 @@
+[Unit]
+Description=Najva E2EE chat relay (blind; stores ciphertext only)
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/node /var/www/najvaa.xyz/server/relay.js
+EnvironmentFile=/etc/s1-relay.env
+DynamicUser=yes
+# Encrypted room history lives here (ciphertext only).
+StateDirectory=najva
+StateDirectoryMode=0700
+Restart=always
+RestartSec=2
+StandardOutput=null
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+MemoryMax=768M
+
+[Install]
+WantedBy=multi-user.target

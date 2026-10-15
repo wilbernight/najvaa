@@ -1,0 +1,18 @@
+# secrets / local
+.env
+*.env
+!*.env.example
+*.key
+*.pem
+auth.json
+# build / runtime
+node_modules/
+panel/storage/logs/*
+panel/storage/framework/cache/data/*
+panel/storage/framework/sessions/*
+panel/storage/framework/views/*
+*.log
+*.tar.gz
+!chat/public/ai/v1/vosk-fa.tar.gz
+.DS_Store
+Thumbs.db
