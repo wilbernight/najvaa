@@ -66,6 +66,7 @@
   <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></symbol>
   <symbol id="i-repeat" viewBox="0 0 24 24"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></symbol>
   <symbol id="i-hash" viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20.5 20.5-4.2-4.2"/></symbol>
 </svg>
 
@@ -155,16 +156,37 @@
 
 <!-- ================= Chat ================= -->
 <main id="chat" class="screen" hidden>
-  <aside id="rail" class="rail">
+  <aside id="rail" class="rail" data-view="chats">
+    <!-- Laptop only: Signal Desktop's narrow nav strip, then the list pane. -->
+    <nav class="rail-nav" aria-label="بخش‌ها">
+      <div class="nav-brand brand-mark" title="نجوا"><svg class="i"><use href="#i-lock"/></svg></div>
+      <button type="button" class="nav-btn active" data-view="chats" title="گفتگوها" aria-label="گفتگوها"><svg class="i"><use href="#i-message"/></svg><b id="nav-unread" class="nav-badge" hidden></b></button>
+      <button type="button" class="nav-btn" data-nav="manage" title="مدیریت محتوا" aria-label="مدیریت محتوا"><svg class="i"><use href="#i-server"/></svg></button>
+      <button type="button" class="nav-btn" data-nav="music" title="ماندگارها" aria-label="ماندگارها"><svg class="i"><use href="#i-music"/></svg></button>
+      <span class="nav-gap"></span>
+      <button type="button" class="nav-btn" data-nav="lock" title="قفل کردن الان" aria-label="قفل کردن الان"><svg class="i"><use href="#i-lock"/></svg></button>
+      <button type="button" class="nav-btn" data-view="settings" title="تنظیمات" aria-label="تنظیمات"><svg class="i"><use href="#i-settings"/></svg></button>
+    </nav>
+    <div class="rail-pane">
     <div class="rail-head">
-      <div class="brand-mark"><svg class="i"><use href="#i-lock"/></svg></div>
-      <span class="brand-name">نجوا</span>
+      <h2 id="rail-title" class="rail-title">گفتگوها</h2>
+      <button id="rail-copy" type="button" class="btn-icon sm" title="کپی کد اتاق" aria-label="کپی کد اتاق"><svg class="i"><use href="#i-copy"/></svg></button>
     </div>
-    <div class="rail-room">
-      <div class="rail-room-label"><svg class="i"><use href="#i-hash"/></svg> کد این اتاق</div>
-      <div id="rail-code" class="rail-room-code" dir="ltr"></div>
-      <button id="rail-copy" type="button" class="btn btn-soft btn-sm wide"><svg class="i"><use href="#i-copy"/></svg> کپی کد اتاق</button>
-    </div>
+    <label class="rail-search">
+      <svg class="i"><use href="#i-search"/></svg>
+      <input id="rail-search" type="search" placeholder="جستجو در پیام‌ها" autocomplete="off" aria-label="جستجو در پیام‌ها">
+    </label>
+    <ul class="chat-list">
+      <li>
+        <button id="chat-row" type="button" class="chat-row active">
+          <span class="avatar-sm"><svg class="i"><use href="#i-user"/></svg><span id="row-dot" class="presence"></span></span>
+          <span class="row-text">
+            <span class="row-top"><b id="row-name" class="row-name">مخاطب امن</b><time id="row-time" class="row-time"></time></span>
+            <span class="row-bottom"><span id="row-snip" class="row-snip"></span><b id="row-badge" class="row-badge" hidden></b></span>
+          </span>
+        </button>
+      </li>
+    </ul>
     <div id="menu" class="popover menu-pop" hidden>
       <button data-act="safety"><svg class="i"><use href="#i-shield"/></svg> کد امنیتی جلسه</button>
       <button data-act="copy"><svg class="i"><use href="#i-copy"/></svg> کپی کد اتاق <b id="menu-code" class="menu-code" dir="ltr"></b></button>
@@ -178,7 +200,12 @@
       <button data-act="clear"><svg class="i"><use href="#i-trash"/></svg> پاک کردن گفتگو برای همه</button>
       <button data-act="leave" class="danger"><svg class="i"><use href="#i-logout"/></svg> خروج از اتاق</button>
     </div>
+    <div class="rail-room">
+      <div class="rail-room-label"><svg class="i"><use href="#i-hash"/></svg> کد این اتاق</div>
+      <div id="rail-code" class="rail-room-code" dir="ltr"></div>
+    </div>
     <p class="rail-foot"><svg class="i"><use href="#i-lock"/></svg> کلیدها فقط روی همین دستگاه ساخته می‌شوند؛ سرور فقط نسخه‌ی رمزشده را نگه می‌دارد و هیچ کلیدی ندارد.</p>
+    </div>
   </aside>
   <section class="conv">
   <header class="topbar">

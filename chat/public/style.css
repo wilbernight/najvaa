@@ -800,14 +800,14 @@ body.veil .msg.peek .quote-text, body.veil .msg.reveal .quote-text { filter: non
    Laptop — a real two-pane layout: a persistent room/settings rail beside
             the conversation, the way desktop messengers are laid out.
    ============================================================ */
-.rail { display: contents; }
-.rail-head, .rail-room, .rail-foot { display: none; }
+.rail, .rail-pane { display: contents; }
+.rail-nav, .rail-head, .rail-search, .chat-list, .rail-room, .rail-foot { display: none; }
 
 @media (min-width: 1024px) {
   /* ---------- conversation pane ---------- */
   #chat {
     max-width: none; margin: 0; border: 0;
-    display: grid; grid-template-columns: 348px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);
+    display: grid; grid-template-columns: 388px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);
     background: var(--bg-2);
   }
   .conv { background: var(--bg); }
@@ -822,35 +822,68 @@ body.veil .msg.peek .quote-text, body.veil .msg.reveal .quote-text { filter: non
   .mini-player { margin-bottom: 8px; }
   .emoji-panel { inset-inline: 22px; max-width: 940px; margin-inline: auto; }
   .ttl-pop { top: 64px; inset-inline-end: 16px; }
-  #menu-btn, .menu-code { display: none; }
+  .menu-code { display: none; }
   .to-bottom { inset-inline-end: 30px; bottom: 18px; }
   .empty h2 { font-size: 19px; }
   .empty p { max-width: 460px; }
-  .drop-zone { inset-inline-start: 348px; }
+  .drop-zone { inset-inline-start: 388px; }
 
-  /* ---------- room / settings rail ---------- */
-  .rail {
-    display: flex; flex-direction: column; min-height: 0;
-    padding: 16px 12px 12px;
-    background: var(--bg-2); border-inline-end: 1px solid var(--line);
+  /* ---------- rail: Signal Desktop's nav strip + list pane ---------- */
+  .rail { display: flex; min-height: 0; background: var(--bg-2); border-inline-end: 1px solid var(--line); }
+  .rail-nav {
+    display: flex; flex-direction: column; align-items: center; gap: 6px; width: 68px; flex: none;
+    padding: 14px 0 12px; border-inline-end: 1px solid var(--line);
   }
-  .rail-head { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; }
-  .rail-head .brand-mark { width: 36px; height: 36px; border-radius: 11px; }
-  .rail-head .brand-name { font-size: 19px; }
-  .rail-room { display: block; margin: 0 2px 16px; padding: 14px; border-radius: 12px; background: var(--surface-2); border: 0; text-align: center; }
-  .rail-room-label { display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; color: var(--text-3); margin-bottom: 8px; }
-  .rail-room-label .i { width: 14px; height: 14px; }
-  .rail-room-code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 27px; font-weight: 800; letter-spacing: 4px; margin-bottom: 14px; text-align: center; }
-  .rail-foot { display: flex; gap: 8px; align-items: flex-start; font-size: 11.5px; line-height: 1.7; color: var(--text-3); margin: 14px 6px 4px; }
-  .rail-foot .i { width: 14px; height: 14px; flex: none; margin-top: 3px; }
+  .nav-brand { width: 36px; height: 36px; margin-bottom: 10px; }
+  .nav-brand .i { width: 19px; height: 19px; }
+  .nav-btn { position: relative; width: 44px; height: 44px; border-radius: 10px; display: grid; place-items: center; color: var(--text-2); transition: background .15s, color .15s; }
+  .nav-btn .i { width: 22px; height: 22px; }
+  .nav-btn:hover { background: var(--surface-2); color: var(--text); }
+  .nav-btn.active { background: var(--surface-3); color: var(--text); }
+  .nav-gap { flex: 1; }
+  .nav-badge, .row-badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--brand); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
+  .nav-badge { position: absolute; top: 3px; inset-inline-end: 1px; }
 
-  /* the ⋯ popover becomes a permanent settings list */
-  #menu[hidden] { display: flex !important; }
-  #menu {
-    position: static; inset: auto; width: auto; min-width: 0; flex: 1 1 auto; min-height: 0;
+  .rail-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; padding: 0 10px 10px; }
+  .rail-head { display: flex; align-items: center; justify-content: space-between; height: 60px; padding: 0 6px; flex: none; }
+  .rail-title { margin: 0; font-size: 19px; font-weight: 700; }
+  .rail-search { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; margin: 0 2px 10px; border-radius: 8px; background: var(--surface-2); flex: none; cursor: text; }
+  .rail-search .i { width: 16px; height: 16px; color: var(--text-3); }
+  .rail-search input { flex: 1; min-width: 0; height: 100%; border: 0; outline: none; background: none; font-size: 13.5px; }
+  .rail-search input::placeholder { color: var(--text-3); }
+  .rail-search input::-webkit-search-cancel-button { display: none; }
+  .chat-list { display: block; list-style: none; margin: 0; padding: 0; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  .chat-row { width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: 10px; text-align: start; transition: background .15s; }
+  .chat-row:hover { background: var(--surface-2); }
+  .chat-row.active { background: var(--surface-3); }
+  .chat-row .avatar-sm { width: 48px; height: 48px; }
+  .chat-row .avatar-sm .i { width: 24px; height: 24px; }
+  .chat-row .presence { border-color: var(--bg-2); }
+  .chat-row.active .presence { border-color: var(--surface-3); }
+  .row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .row-top, .row-bottom { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .row-name { font-size: 14.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row-time { flex: none; font-size: 12px; color: var(--text-3); }
+  .row-snip { font-size: 13px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row-snip.status { color: var(--text-3); }
+  body.veil .row-snip:not(.status) { filter: blur(5px); transition: filter .12s; }
+  body.veil .chat-row:hover .row-snip { filter: none; }
+  .row-badge { flex: none; }
+  .rail-room { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 2px 0; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); flex: none; }
+  .rail-room-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); }
+  .rail-room-label .i { width: 14px; height: 14px; }
+  .rail-room-code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 17px; font-weight: 700; letter-spacing: 2px; }
+  .rail-foot { display: flex; gap: 8px; align-items: flex-start; font-size: 11px; line-height: 1.7; color: var(--text-3); margin: 10px 6px 0; flex: none; }
+  .rail-foot .i { width: 13px; height: 13px; flex: none; margin-top: 3px; }
+
+  /* settings view: the ⋯ list fills the pane instead of the chat list */
+  #menu { display: none !important; }
+  .rail[data-view="settings"] #menu {
+    display: flex !important; position: static; inset: auto; width: auto; min-width: 0; flex: 1 1 auto; min-height: 0;
     overflow-y: auto; overscroll-behavior: contain;
     background: none; border: 0; box-shadow: none; padding: 0; animation: none;
   }
+  .rail[data-view="settings"] .rail-search, .rail[data-view="settings"] .chat-list, .rail[data-view="settings"] .rail-room { display: none; }
   #menu button { padding: 11px 12px; border-radius: 8px; }
   #menu button:hover { background: var(--surface-2); }
   #menu hr { margin: 6px 10px; }
@@ -875,7 +908,7 @@ body.veil .msg.peek .quote-text, body.veil .msg.reveal .quote-text { filter: non
   .lock-box { max-width: 400px; }
 
   /* ---------- tidy scrollbars (pointer devices only) ---------- */
-  #messages, #menu, .rail, .modal-card, .emoji-panel { scrollbar-width: thin; scrollbar-color: var(--surface-3) transparent; }
+  #messages, #menu, .rail, .chat-list, .modal-card, .emoji-panel { scrollbar-width: thin; scrollbar-color: var(--surface-3) transparent; }
   #messages::-webkit-scrollbar, #menu::-webkit-scrollbar, .modal-card::-webkit-scrollbar, .emoji-panel::-webkit-scrollbar { width: 10px; height: 10px; }
   #messages::-webkit-scrollbar-thumb, #menu::-webkit-scrollbar-thumb, .modal-card::-webkit-scrollbar-thumb, .emoji-panel::-webkit-scrollbar-thumb { background: var(--surface-3); border: 3px solid transparent; border-radius: 99px; background-clip: content-box; }
   #messages::-webkit-scrollbar-thumb:hover, #menu::-webkit-scrollbar-thumb:hover { background: var(--text-3); background-clip: content-box; }

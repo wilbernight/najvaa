@@ -422,6 +422,7 @@ function updatePresence() {
   else if (ws && ws.readyState === 1) setStatus('waiting');
   $('call-btn').disabled = !sec.length || features.calls === false;
   $('peer-title').textContent = sec.length ? sec.map((x) => x.name || 'مخاطب').join(' · ') : 'مخاطب امن';
+  scheduleChatRow();
   document.body.classList.toggle('multi', knownNames.size > 1 || sessions.size > 1);
   if (!sec.length) $('typing').hidden = true;
 }
@@ -771,6 +772,7 @@ function createEntry({ id, dir, ttl: life, kind, snippet, from, ts }) {
   };
   messages.set(id, entry);
   li._entry = entry;
+  scheduleChatRow();
 
   reactBtn.onclick = (e) => { e.stopPropagation(); openReactBar(entry); };
   reacts.onclick = (e) => { e.stopPropagation(); openReactBar(entry); };
@@ -931,6 +933,7 @@ function removeEntry(entry) {
   }
   if (igModal) renderIgModal();
   if (!messages.size) $('empty-state').hidden = false;
+  scheduleChatRow();
 }
 
 function clearMessages() {
@@ -2905,17 +2908,18 @@ const MG_KIND = (ev) => (ev.k === 'text' ? (ev.preview ? 'ig' : 'text') : ev.kin
 const MG_LABEL = { text: 'متن', ig: 'اینستاگرام', image: 'عکس', video: 'ویدیو', audio: 'موزیک', voice: 'ویس', file: 'فایل' };
 const MG_ICON = { text: 'message', ig: 'insta', image: 'image', video: 'video', audio: 'music', voice: 'mic', file: 'file' };
 
-async function openManager() {
+async function openManager(query = '') {
   closePanels();
   $('manage-modal').hidden = false;
   const gen = ++mgGen; // reopening while a load is in flight must not mix the two
   mgSelected.clear();
   mgItems = [];
-  mgQuery = '';
+  mgQuery = query;
   mgBusy = true;
   mgShown = MG_RENDER;
-  $('mg-search').value = '';
-  $('mg-search-clear').hidden = true;
+  $('mg-search').value = query;
+  $('mg-search-clear').hidden = !query;
+  if (query) { $('mg-search').focus(); const n = query.length; $('mg-search').setSelectionRange(n, n); }
   $('mg-list').textContent = '';
   $('mg-empty').hidden = true;
   $('mg-sub').textContent = 'در حال خواندن تاریخچه از سرور…';
@@ -4053,7 +4057,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-16.2';
+const APP_VERSION = '2026-10-16.3';
 let updateOffered = false;
 async function checkUpdate() {
   if (updateOffered || document.hidden) return;
@@ -4183,11 +4187,76 @@ function setStatus(key, n = 1) {
   st.append(document.createTextNode(text));
   st.classList.toggle('secure', key === 'secure');
   $('status-dot').className = `presence ${color}`;
+  scheduleChatRow();
   $('share-card').hidden = key !== 'waiting';
 }
 
 function updateTitle() {
   document.title = unread ? `(${fa(unread)}) نجوا` : 'نجوا';
+  scheduleChatRow();
+}
+
+// ---------- laptop rail (Signal Desktop layout) ----------
+// A nav strip, then a list pane that shows either the chat list (this room's
+// one row) or the settings list. On the phone none of it has a box.
+const isWide = () => matchMedia('(min-width: 1024px)').matches;
+function setRailView(view) {
+  $('rail').dataset.view = view;
+  $('rail-title').textContent = view === 'settings' ? 'تنظیمات' : 'گفتگوها';
+  for (const b of document.querySelectorAll('.nav-btn[data-view]')) b.classList.toggle('active', b.dataset.view === view);
+}
+
+const ROW_KIND = { image: 'عکس', video: 'ویدیو', audio: 'موزیک', voice: 'ویس', file: 'فایل', gif: 'GIF', ig: 'پست اینستاگرام' };
+let chatRowQueued = false;
+function scheduleChatRow() {
+  if (chatRowQueued) return;
+  chatRowQueued = true;
+  setTimeout(() => { chatRowQueued = false; updateChatRow(); }, 0); // not rAF: it stalls in a hidden tab
+}
+// The row mirrors the conversation header plus the latest message, the way a
+// Signal chat list row does.
+function updateChatRow() {
+  $('row-name').textContent = $('peer-title').textContent;
+  $('row-dot').className = $('status-dot').className;
+  let last = null;
+  for (const m of messages.values()) if (!last || m.ts >= last.ts) last = m;
+  const snip = $('row-snip');
+  if (last) {
+    const what = last.kind === 'text' ? last.snippet : ROW_KIND[last.kind] || 'پیام';
+    snip.textContent = (last.dir === 'out' ? 'شما: ' : '') + what;
+    snip.classList.remove('status');
+    const d = new Date(last.ts);
+    $('row-time').textContent = d.toDateString() === new Date().toDateString()
+      ? d.toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })
+      : d.toLocaleDateString('fa-IR', { day: 'numeric', month: 'short' });
+  } else {
+    snip.textContent = $('status-text').textContent;
+    snip.classList.add('status');
+    $('row-time').textContent = '';
+  }
+  const badge = unread ? fa(unread > 99 ? '99+' : unread) : '';
+  for (const b of [$('row-badge'), $('nav-unread')]) { b.textContent = badge; b.hidden = !badge; }
+}
+
+function bindRail() {
+  for (const b of document.querySelectorAll('.nav-btn')) {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      if (b.dataset.view) { setRailView(b.dataset.view); return; }
+      if (b.dataset.nav === 'manage') openManager();
+      if (b.dataset.nav === 'music') $('music-btn').click();
+      if (b.dataset.nav === 'lock') lockNow();
+    };
+  }
+  $('chat-row').onclick = () => { setRailView('chats'); $('input').focus(); };
+  // Searching happens in the content manager, which reads the whole log:
+  // the first keystroke here opens it and typing carries on over there.
+  $('rail-search').addEventListener('input', () => {
+    const q = $('rail-search').value;
+    $('rail-search').value = '';
+    if (q.trim()) openManager(q);
+  });
+  $('rail-search').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); openManager(''); } });
 }
 
 function show(screen) {
@@ -4901,6 +4970,7 @@ function bindUi() {
   applyVoiceFxUi();
   bindMusic();
   bindManager();
+  bindRail();
   bindVeil();
   $('messages').addEventListener('scroll', () => { if ($('messages').scrollTop < 60) loadHistory(false); updateToBottom(); }, { passive: true });
   $('to-bottom').onclick = () => {
@@ -4945,7 +5015,11 @@ function bindUi() {
   };
   $('speaker-btn').onclick = () => setSpeaker(!audioRoute.speaker);
 
-  $('menu-btn').onclick = (e) => { e.stopPropagation(); const m = $('menu'); const open = m.hidden; closePanels(); m.hidden = !open; };
+  $('menu-btn').onclick = (e) => {
+    e.stopPropagation();
+    if (isWide()) { setRailView($('rail').dataset.view === 'settings' ? 'chats' : 'settings'); return; }
+    const m = $('menu'); const open = m.hidden; closePanels(); m.hidden = !open;
+  };
   document.addEventListener('click', closePanels);
   window.addEventListener('pointerdown', onGlobalPointerDown, true);
   window.addEventListener('pointerup', onGlobalPointerUp, true);
