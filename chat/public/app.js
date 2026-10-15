@@ -1825,6 +1825,47 @@ async function shrinkImage(src, max, quality) {
   }
 }
 
+// A message that is just a link to an audio file becomes a track: the relay
+// fetches it (POST /h/music, guarded against internal addresses) and this
+// device encrypts and sends it like any music file, so the person you talk
+// to, and you, never connect to the unknown site. Any failure: plain link.
+const SONG_LINK_RE = /^https?:\/\/\S+\.(?:mp3|m4a|aac|ogg|oga|opus|flac|wav)(?:[?#]\S*)?$/i;
+async function sendSongLink(url) {
+  const reply = replyTo;
+  hint('در حال دریافت آهنگ از لینک…');
+  try {
+    const r = await storeFetch('/h/music', { method: 'POST', body: JSON.stringify({ u: url }), timeout: 180000 });
+    if (!r.ok) {
+      hint('');
+      toast({ 413: 'آهنگ بزرگ‌تر از ۵۰ مگابایت است؛ لینک به‌صورت متن رفت', 415: 'این لینک فایل صوتی نیست؛ به‌صورت متن رفت', 429: 'سرور الان مشغول است؛ لینک به‌صورت متن رفت' }[r.status] || 'دریافت آهنگ انجام نشد؛ لینک به‌صورت متن رفت');
+      return false;
+    }
+    const total = Number(r.headers.get('content-length')) || 0;
+    const reader = r.body.getReader();
+    const parts = [];
+    let got = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+      got += value.length;
+      hint(total ? `در حال دریافت آهنگ… ${fa(Math.round((got / total) * 100))}٪` : `در حال دریافت آهنگ… ${fmtSize(got)}`);
+    }
+    hint('');
+    const type = (r.headers.get('content-type') || '').split(';')[0];
+    if (!type.startsWith('audio/')) throw new Error('type');
+    let name = 'track';
+    try { name = decodeURIComponent(r.headers.get('x-track-name') || '') || name; } catch {}
+    if (replyTo === reply) clearReply();
+    await sendFile(new File(parts, name, { type }), false, { reply });
+    return true;
+  } catch {
+    hint('');
+    toast('دریافت آهنگ انجام نشد؛ لینک به‌صورت متن رفت');
+    return false;
+  }
+}
+
 async function sendText() {
   if (editing) { sendEdit(); return; }
   const input = $('input');
@@ -1834,6 +1875,7 @@ async function sendText() {
   textSentAt = Date.now();
   autoGrow();
   closePanels();
+  if (SONG_LINK_RE.test(body) && (await sendSongLink(body))) return;
   let preview = null;
   const link = IG_LINK_RE.exec(body)?.[0];
   if (link) {
@@ -4677,7 +4719,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-16.7';
+const APP_VERSION = '2026-10-16.8';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.

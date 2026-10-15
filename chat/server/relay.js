@@ -4,6 +4,9 @@
 // them. Nothing is stored or logged.
 
 const http = require('http');
+const https = require('https');
+const net = require('net');
+const dns = require('dns');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 
@@ -412,6 +415,148 @@ async function storeAuth(req, mayCreate) {
   return { dir };
 }
 
+// ---------- song links (POST /h/music) ----------
+// A member sends a link to an audio file; the relay downloads it and hands the
+// bytes straight back, and the device encrypts and sends it like any track.
+// The device never touches the unknown site, and the relay is not an open
+// proxy for internal addresses (SSRF):
+//  - only members of a room (valid room auth), a global hourly budget and at
+//    most two downloads at once;
+//  - http/https on ports 80/443 only; every name is resolved by us and EVERY
+//    address checked against private / loopback / link-local / reserved
+//    ranges inside the socket's own lookup, so DNS rebinding cannot swap in
+//    an internal address after the check; redirects are followed by hand and
+//    re-checked;
+//  - audio only, by content type AND by the file's first bytes; 50 MB, timed
+//    out; nothing is written to disk, cached or logged.
+const MUSIC_MAX = 50 * 1024 * 1024;
+let musicBudget = 120;
+let musicActive = 0;
+setInterval(() => { musicBudget = 120; }, 3600000);
+
+function ipBlocked(ip) {
+  if (net.isIPv4(ip)) {
+    const [a, b, c] = ip.split('.').map(Number);
+    return a === 0 || a === 10 || a === 127 || a >= 224 ||
+      (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) ||
+      (a === 192 && b === 0 && (c === 0 || c === 2)) || (a === 198 && (b === 18 || b === 19)) ||
+      (a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113);
+  }
+  if (net.isIPv6(ip)) {
+    const x = ip.toLowerCase();
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(x);
+    if (mapped) return ipBlocked(mapped[1]);
+    return x === '::' || x === '::1' || /^f[cd]/.test(x) || /^fe[89ab]/.test(x) || /^ff/.test(x) ||
+      x.startsWith('64:ff9b:') || x.startsWith('2001:db8:') || x.startsWith('::ffff:') || x.startsWith('100::');
+  }
+  return true;
+}
+
+// dns.lookup wrapper used by the socket itself: refuses the connection if any
+// resolved address is not public.
+function safeLookup(host, opts, cb) {
+  dns.lookup(host, { all: true, verbatim: true }, (err, addrs) => {
+    if (err) return cb(err);
+    if (!addrs.length || addrs.some((a) => ipBlocked(a.address))) return cb(new Error('blocked address'));
+    const pick = addrs[0];
+    if (opts && opts.all) return cb(null, addrs);
+    cb(null, pick.address, pick.family);
+  });
+}
+
+const AUDIO_EXT = { mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg', flac: 'audio/flac', wav: 'audio/wav' };
+function audioMagic(b) {
+  if (b.length < 12) return null;
+  const s4 = b.subarray(0, 4).toString('latin1');
+  if (b.subarray(0, 3).toString('latin1') === 'ID3' || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0)) return (b[1] & 0x06) === 0 ? 'audio/aac' : 'audio/mpeg';
+  if (s4 === 'OggS') return 'audio/ogg';
+  if (s4 === 'fLaC') return 'audio/flac';
+  if (s4 === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WAVE') return 'audio/wav';
+  if (b.subarray(4, 8).toString('latin1') === 'ftyp') return 'audio/mp4';
+  return null;
+}
+
+function musicGet(url, hop = 0) {
+  return new Promise((resolve, reject) => {
+    if (hop > 3) return reject(new Error('redirects'));
+    if (!/^https?:$/.test(url.protocol) || url.username || url.password) return reject(new Error('scheme'));
+    const port = url.port ? Number(url.port) : url.protocol === 'https:' ? 443 : 80;
+    if (port !== 80 && port !== 443) return reject(new Error('port'));
+    if (net.isIP(url.hostname.replace(/^\[|\]$/g, '')) && ipBlocked(url.hostname.replace(/^\[|\]$/g, ''))) return reject(new Error('blocked address'));
+    const mod = url.protocol === 'https:' ? https : http;
+    const req = mod.request(url, {
+      method: 'GET', lookup: safeLookup, timeout: 15000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Najva music fetch)', Accept: 'audio/*,application/octet-stream;q=0.5' },
+    }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        let next;
+        try { next = new URL(res.headers.location, url); } catch { return reject(new Error('redirect')); }
+        return musicGet(next, hop + 1).then(resolve, reject);
+      }
+      if (res.statusCode !== 200) { res.resume(); return reject(new Error('status')); }
+      resolve({ res, url });
+    });
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+async function handleMusicFetch(req, res) {
+  if (!okOrigin(req.headers.origin)) return json(res, 403, {});
+  const auth = await storeAuth(req, false);
+  if (!auth || auth.claimed) return json(res, 403, {});
+  if (musicActive >= 2) return json(res, 429, { error: 'busy' });
+  if (--musicBudget < 0) return json(res, 429, {});
+  musicActive++;
+  let done = false;
+  const finish = () => { if (!done) { done = true; musicActive--; } };
+  res.on('close', finish);
+  try {
+    const { u } = JSON.parse(await readBody(req, 2048));
+    if (typeof u !== 'string' || u.length > 1000) return json(res, 400, {});
+    const { res: up, url } = await musicGet(new URL(u));
+    const len = Number(up.headers['content-length'] || 0);
+    if (len > MUSIC_MAX) { up.destroy(); return json(res, 413, {}); }
+    const ctype = String(up.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+    const ext = (/\.([a-z0-9]{2,5})$/i.exec(url.pathname) || [])[1]?.toLowerCase();
+    if (!(ctype.startsWith('audio/') || ((ctype === 'application/octet-stream' || ctype === 'binary/octet-stream' || !ctype) && AUDIO_EXT[ext]))) { up.destroy(); return json(res, 415, {}); }
+    // Read the first bytes to check they really are audio before sending any.
+    const chunks = [];
+    let n = 0;
+    let type = null;
+    const idle = setTimeout(() => up.destroy(new Error('timeout')), 120000);
+    for await (const c of up) {
+      n += c.length;
+      if (n > MUSIC_MAX) { up.destroy(); clearTimeout(idle); return res.headersSent ? res.destroy() : json(res, 413, {}); }
+      if (!type) {
+        chunks.push(c);
+        const head = Buffer.concat(chunks);
+        if (head.length < 12) continue;
+        type = audioMagic(head);
+        if (!type) { up.destroy(); clearTimeout(idle); return json(res, 415, {}); }
+        let name = decodeURIComponent(path.basename(url.pathname)).replace(/[\x00-\x1f"\\/]/g, '').slice(0, 120) || 'track';
+        const cd = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(String(up.headers['content-disposition'] || ''));
+        if (cd) { try { name = decodeURIComponent(cd[1]).replace(/[\x00-\x1f"\\/]/g, '').slice(0, 120) || name; } catch {} }
+        res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Track-Name': encodeURIComponent(name), ...(len ? { 'Content-Length': len } : {}) });
+        res.write(head);
+        continue;
+      }
+      if (!res.write(c)) await new Promise((r) => res.once('drain', r));
+    }
+    clearTimeout(idle);
+    if (!type) return json(res, 415, {});
+    res.end();
+  } catch {
+    if (!res.headersSent) json(res, 422, {});
+    else res.destroy();
+  } finally {
+    finish();
+  }
+}
+
 async function listEntries(dir) {
   const names = await fsp.readdir(path.join(dir, 'log')).catch(() => []);
   return names.map(parseEntry).filter(Boolean);
@@ -632,6 +777,7 @@ setTimeout(janitor, 5000);
 setInterval(janitor, 5 * 60000);
 
 const server = http.createServer((req, res) => {
+  if (req.method === 'POST' && req.url === '/h/music') return handleMusicFetch(req, res);
   if (req.url.startsWith('/h/')) return handleStore(req, res);
   if (req.method === 'POST' && req.url === '/preview') return handlePreview(req, res);
   if (req.method === 'POST' && req.url === '/gif/search') return handleGifSearch(req, res);
