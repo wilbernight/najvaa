@@ -7,12 +7,16 @@ chat/public/emoji/ (git-ignored), which are copied to the server as they are.
 
     git clone --depth 1 https://github.com/Tarikul-Islam-Anik/Animated-Fluent-Emojis afe
     curl -O https://unicode.org/Public/emoji/15.1/emoji-test.txt
-    python chat/emoji-src/build_emoji.py afe emoji-test.txt chat/public/emoji
+    python chat/emoji-src/build_emoji.py afe emoji-test.txt chat/public/emoji [cldr/*.json]
+
+Optional CLDR keyword files (annotations + annotationsDerived, e.g. en and fa,
+from github.com/unicode-org/cldr-json) make the picker searchable in those
+languages: "laugh", "قلب", "خنده" and so on.
 
 Output
     a/<key>.webp   animated, 96px  (reactions, big-emoji messages, picker hover)
     s/<key>.webp   still, 64px     (inline in text, picker grid)
-    index.json     picker groups in Unicode order, skin tones, English names
+    index.json     picker groups in Unicode order, skin tones, English names, keywords
 <key> is the code points in lowercase hex joined by "-", without FE0F.
 Re-running skips files that already exist.
 """
@@ -109,7 +113,20 @@ def convert(job):
     return key
 
 
-def main(repo, emoji_test, out_dir):
+def load_keywords(files):
+    """key -> set of keywords and names, from CLDR annotation JSON files."""
+    out = {}
+    for path in files:
+        data = json.load(open(path, encoding='utf-8'))
+        root = data.get('annotations') or data.get('annotationsDerived') or {}
+        for glyph, ann in (root.get('annotations') or {}).items():
+            words = out.setdefault(key_of(glyph), set())
+            for w in (ann.get('default') or []) + (ann.get('tts') or []):
+                words.add(w.strip().lower())
+    return out
+
+
+def main(repo, emoji_test, out_dir, *keyword_files):
     by_name, order = parse_unicode(emoji_test)
     os.makedirs(os.path.join(out_dir, 'a'), exist_ok=True)
     os.makedirs(os.path.join(out_dir, 's'), exist_ok=True)
@@ -146,7 +163,13 @@ def main(repo, emoji_test, out_dir):
                 continue
         groups.setdefault(GROUPS.get(group, group), []).append(glyph)
         names[glyph] = name
-    index = {'v': 1, 'g': [[title, items] for title, items in groups.items()], 't': tones, 'n': names}
+    keywords = load_keywords(keyword_files)
+    kw = {}
+    for glyph, name in names.items():
+        words = keywords.get(key_of(glyph), set()) - {name.lower()}
+        if words:
+            kw[glyph] = '|'.join(sorted(words))
+    index = {'v': 1, 'g': [[title, items] for title, items in groups.items()], 't': tones, 'n': names, 'k': kw}
     with open(os.path.join(out_dir, 'index.json'), 'w', encoding='utf-8') as f:
         json.dump(index, f, ensure_ascii=False, separators=(',', ':'))
     print(f'{len(have)} emoji, {sum(len(v) for v in groups.values())} in the picker, {len(missed)} unmatched: {missed}')
@@ -154,4 +177,4 @@ def main(repo, emoji_test, out_dir):
 
 if __name__ == '__main__':
     sys.stdout.reconfigure(encoding='utf-8')
-    main(*sys.argv[1:4])
+    main(*sys.argv[1:])

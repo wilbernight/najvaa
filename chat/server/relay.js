@@ -206,7 +206,7 @@ const GIF_MEDIA = {
   t: { t: (id) => `https://media.tenor.com/${id}AAAAN/x.png`, s: (id) => `https://media.tenor.com/${id}AAAAS/x.gif` },
 };
 const GIF_HOSTS = { g: /^media[0-9]?\.giphy\.com$/, t: /^media[0-9]?\.tenor\.com$/ };
-const gifCache = new Map(); // query -> { at, items }, in memory only
+const gifRuns = new Map(); // query -> { at, related, sent, first, pages }: one search and its "more" pages, in memory only
 let gifBudget = 900;
 setInterval(() => { gifBudget = 900; }, 3600000);
 
@@ -225,47 +225,86 @@ function json(res, code, obj) {
   res.end(JSON.stringify(obj));
 }
 
-async function scrapeIds(url, re, idRe) {
+// Ids on a search page, plus the page's own "related searches", which is how
+// "load more" goes deeper: neither site pages its HTML results without a key.
+async function scrapeIds(url, re, idRe, relRe) {
   try {
     const host = new URL(url).hostname;
     const page = await fetchLimited(new URL(url), (h) => h === host, 2500000, 'text/html', true, BROWSER_UA);
     const html = page.body.toString('utf8');
     const ids = [];
     for (const m of html.matchAll(re)) if (idRe.test(m[1]) && !ids.includes(m[1])) ids.push(m[1]);
-    return ids;
+    const related = [];
+    for (const m of html.matchAll(relRe)) {
+      let term = '';
+      try { term = decodeURIComponent(m[1]).replace(/-/g, ' ').trim().toLowerCase(); } catch {}
+      if (term && term.length <= 50 && !related.includes(term)) related.push(term);
+    }
+    return { ids, related };
   } catch {
-    return [];
+    return { ids: [], related: [] };
   }
 }
 
 async function findGifs(q) {
   const slug = encodeURIComponent(q.toLowerCase().replace(/\s+/g, '-'));
   const [g, t] = await Promise.all([
-    scrapeIds(`https://giphy.com/search/${slug}`, /media\/(?:v1\.[^/"\\]+\/)?([A-Za-z0-9]{12,40})\/(?:giphy|200w|100w|200|100)\b/g, GIF_ID.g),
-    scrapeIds(`https://tenor.com/search/${slug}-gifs`, /media[0-9]?\.tenor\.com\/(?:m\/)?([A-Za-z0-9_-]{11})AAAA[A-Za-z0-9]\//g, GIF_ID.t),
+    scrapeIds(`https://giphy.com/search/${slug}`, /media\/(?:v1\.[^/"\\]+\/)?([A-Za-z0-9]{12,40})\/(?:giphy|200w|100w|200|100)\b/g, GIF_ID.g, /href="\/search\/([^"?#/]+)"/g),
+    scrapeIds(`https://tenor.com/search/${slug}-gifs`, /media[0-9]?\.tenor\.com\/(?:m\/)?([A-Za-z0-9_-]{11})AAAA[A-Za-z0-9]\//g, GIF_ID.t, /href="\/search\/([^"?#/]+)-gifs"/g),
   ]);
   const items = [];
-  for (let i = 0; items.length < 36 && (i < g.length || i < t.length); i++) {
-    if (i < t.length && i < 18) items.push({ p: 't', id: t[i] });
-    if (i < g.length && i < 18) items.push({ p: 'g', id: g[i] });
+  for (let i = 0; i < g.ids.length || i < t.ids.length; i++) { // alternate, so neither source dominates
+    if (i < t.ids.length) items.push({ p: 't', id: t.ids[i] });
+    if (i < g.ids.length) items.push({ p: 'g', id: g.ids[i] });
   }
-  return items.map((it) => ({ thumb: `/gif/m?p=${it.p}&r=t&id=${it.id}`, send: `/gif/m?p=${it.p}&r=s&id=${it.id}` }));
+  const related = [];
+  for (let i = 0; i < Math.max(t.related.length, g.related.length); i++) {
+    for (const term of [t.related[i], g.related[i]]) if (term && term !== q && !related.includes(term)) related.push(term);
+  }
+  return { items, related: related.slice(0, 12) };
+}
+
+// page 0: the query itself; page n: its n-th related search. Ids already
+// sent for this query are dropped, so "more" never repeats a GIF.
+// Each answered page is kept in its run, so asking again costs nothing and
+// the "already sent" set always matches what clients were given.
+async function gifPage(q, page) {
+  let run = gifRuns.get(q);
+  if (!run || Date.now() - run.at > 600000) {
+    if (--gifBudget < 0) return null;
+    const first = await findGifs(q);
+    run = { at: Date.now(), related: first.related, sent: new Set(), first: first.items, pages: [] };
+    gifRuns.set(q, run);
+    if (gifRuns.size > 200) gifRuns.delete(gifRuns.keys().next().value);
+  }
+  if (run.pages[page]) return run.pages[page];
+  let raw = [];
+  if (page === 0) raw = run.first;
+  else if (page <= run.related.length) {
+    if (--gifBudget < 0) return null;
+    raw = (await findGifs(run.related[page - 1])).items;
+  }
+  const items = [];
+  for (const it of raw) {
+    const k = `${it.p}:${it.id}`;
+    if (run.sent.has(k)) continue;
+    run.sent.add(k);
+    items.push({ thumb: `/gif/m?p=${it.p}&r=t&id=${it.id}`, send: `/gif/m?p=${it.p}&r=s&id=${it.id}` });
+  }
+  run.pages[page] = { items, more: page < run.related.length };
+  return run.pages[page];
 }
 
 async function handleGifSearch(req, res) {
   if (!okOrigin(req.headers.origin)) return json(res, 403, {});
   if (!feature('gif')) return json(res, 503, { error: 'disabled' });
   try {
-    const { q } = JSON.parse(await readBody(req, 1024));
+    const { q, page: pageIn } = JSON.parse(await readBody(req, 1024));
     if (typeof q !== 'string' || !q.trim() || q.length > 50) return json(res, 400, {});
-    const key = q.trim().toLowerCase();
-    const hit = gifCache.get(key);
-    if (hit && Date.now() - hit.at < 600000) return json(res, 200, { items: hit.items });
-    if (--gifBudget < 0) return json(res, 429, {});
-    const items = await findGifs(key);
-    gifCache.set(key, { at: Date.now(), items });
-    if (gifCache.size > 200) gifCache.delete(gifCache.keys().next().value);
-    json(res, 200, { items });
+    const page = Number.isInteger(pageIn) && pageIn >= 0 && pageIn <= 12 ? pageIn : 0;
+    const out = await gifPage(q.trim().toLowerCase(), page);
+    if (!out) return json(res, 429, {});
+    json(res, 200, out);
   } catch {
     json(res, 422, {});
   }

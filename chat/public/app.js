@@ -580,8 +580,13 @@ async function onInner(s, o) {
       bumpUnread();
       break;
     }
+    case 'note': {
+      const r = applyNote({ id: o.eid, target: o.id, rid: o.rid, a: authorOf(s, o), an: o.an, t: o.t, ts: o.ts });
+      if (r?.isNew) { activity(r.note.a, messages.get(o.id), o.t); bumpUnread(); }
+      break;
+    }
     case 'edit':
-      applyEdit({ id: o.eid, target: o.id, a: authorOf(s, o), body: o.body, ts: o.ts });
+      applyEdit({ id: o.eid, target: o.id, a: authorOf(s, o), body: o.body, caption: o.caption, file: o.file, ts: o.ts });
       break;
     case 'file':
       await onFileMeta(s, o);
@@ -941,6 +946,7 @@ function removeEntry(entry) {
   visibleUnread.delete(entry);
   for (const a of Object.values(entry.acts)) if (a) removeAct(a);
   if (entry.url) URL.revokeObjectURL(entry.url);
+  for (const v of entry.versions || []) if (v.url && v.url !== entry.url) URL.revokeObjectURL(v.url);
   entry.content.textContent = '';
   entry.el.remove();
   if (entry.stack) {
@@ -960,6 +966,7 @@ function clearMessages() {
   mgCache = null;
   mgEdits.clear();
   pendingEdits.clear();
+  pendingNotes.clear();
   if (editing) cancelEdit();
   $('empty-state').hidden = false;
 }
@@ -1146,26 +1153,54 @@ function clearReply() {
 // earlier wording stays visible under the message, in another colour.
 const pendingEdits = new Map(); // target id -> edits that arrived before the message
 let editing = null; // the entry being edited from the composer
+let editFile = null; // a replacement photo/video picked while editing media
 
-const canEdit = (entry) => entry.dir === 'out' && entry.kind === 'text' && !entry.preview && typeof entry.body === 'string';
+const MEDIA_EDIT = new Set(['image', 'video', 'gif']);
+const canEdit = (entry) => entry.dir === 'out' && (
+  (entry.kind === 'text' && !entry.preview && typeof entry.body === 'string') ||
+  (MEDIA_EDIT.has(entry.kind) && entry.ready && !!entry.blob));
 
 function startEdit(entry) {
   clearReply();
   editing = entry;
+  editFile = null;
+  const media = MEDIA_EDIT.has(entry.kind);
   const bar = $('reply-bar');
   bar.textContent = '';
   bar.classList.add('editing');
   const box = el('div', 'reply-info');
-  box.append(el('div', 'reply-who', 'ویرایش پیام'), el('div', 'reply-snip', entry.body.slice(0, 80)));
+  const what = { image: 'عکس', video: 'ویدیو', gif: 'گیف' }[entry.kind];
+  const snip = el('div', 'reply-snip', media ? (entry.caption || 'بدون توضیح — متن بنویسید یا عکس را عوض کنید') : entry.body.slice(0, 80));
+  box.append(el('div', 'reply-who', media ? `ویرایش ${what}` : 'ویرایش پیام'), snip);
   const x = el('button', 'btn-icon sm');
   x.type = 'button';
   x.setAttribute('aria-label', 'لغو ویرایش');
   x.append(icon('x'));
   x.onclick = cancelEdit;
-  bar.append(icon('edit'), box, x);
+  bar.append(icon('edit'), box);
+  if (media) {
+    const swap = el('button', 'btn btn-soft btn-sm edit-swap', 'تعویض');
+    swap.type = 'button';
+    swap.prepend(icon('image'));
+    swap.onclick = () => {
+      const pick = document.createElement('input');
+      pick.type = 'file';
+      pick.accept = 'image/*,video/*';
+      pick.onchange = () => {
+        const f = pick.files[0];
+        if (!f || !/^(image|video)\//.test(f.type)) return;
+        editFile = f;
+        snip.textContent = `جایگزین: ${f.name}`;
+      };
+      pickingUntil = Date.now() + 60000; // not in the page, so the click listener can't see it
+      pick.click();
+    };
+    bar.append(swap);
+  }
+  bar.append(x);
   bar.hidden = false;
   const input = $('input');
-  input.value = entry.body;
+  input.value = media ? entry.caption || '' : entry.body;
   autoGrow();
   input.focus();
   input.setSelectionRange(input.value.length, input.value.length);
@@ -1174,14 +1209,16 @@ function startEdit(entry) {
 function cancelEdit() {
   if (!editing) return;
   editing = null;
+  editFile = null;
   $('reply-bar').classList.remove('editing');
   $('reply-bar').hidden = true;
   $('input').value = '';
   autoGrow();
 }
 
-function sendEdit() {
+async function sendEdit() {
   const entry = editing;
+  if (entry && MEDIA_EDIT.has(entry.kind)) return sendMediaEdit(entry);
   const body = $('input').value.trim().slice(0, 4000);
   cancelEdit();
   if (!entry || !messages.has(entry.id) || !body || body === entry.body) return;
@@ -1191,9 +1228,83 @@ function sendEdit() {
   storeEvent({ k: 'edit', ...ev }).catch(() => toast('ذخیره‌ی ویرایش روی سرور انجام نشد'));
 }
 
-function applyEdit(ev) {
-  if (typeof ev.id !== 'string' || typeof ev.target !== 'string' || typeof ev.body !== 'string' || !ev.body.trim()) return;
+// A photo/video edit: a new caption, a new file, or both. A new file is
+// uploaded encrypted like any attachment (its log entry id is the file id, so
+// deleting the edit deletes the file); others download it from the server.
+async function sendMediaEdit(entry) {
+  const caption = $('input').value.trim().slice(0, 1000);
+  const file = editFile;
+  cancelEdit();
+  if (!messages.has(entry.id) || (!file && caption === (entry.caption || ''))) return;
+  const ev = { id: b64u(rand(12)), target: entry.id, a: myDev, caption, ts: Date.now() };
+  let blob = null;
+  if (file) {
+    if (file.size > MAX_FILE) { toast(`حداکثر حجم فایل ${fa(100)} مگابایت است`); return; }
+    blob = file;
+    if (file.type.startsWith('image/') && file.type !== 'image/gif') blob = (await stripImage(file)) || file;
+    toast('در حال بارگذاری فایل جدید…');
+    try {
+      ev.file = await uploadBlob(blob, file.name);
+    } catch {
+      toast('بارگذاری فایل جدید انجام نشد');
+      return;
+    }
+    ev.id = ev.file.id;
+  }
+  applyEdit(ev, blob);
+  if (anySecure()) post({ k: 'edit', id: entry.id, eid: ev.id, caption, file: ev.file, ts: ev.ts, a: myDev }).catch(() => {});
+  storeEvent({ k: 'edit', ...ev }, ev.file ? { blob: true } : {}).catch(() => toast('ذخیره‌ی ویرایش روی سرور انجام نشد'));
+}
+
+async function uploadBlob(blob, name) {
+  const idBytes = rand(12);
+  const id = b64u(idBytes);
+  const key = rand(32);
+  const total = Math.max(1, Math.ceil(blob.size / CHUNK));
+  const aes = await subtle.importKey('raw', key, 'AES-GCM', false, ['encrypt']);
+  const keyB64 = b64u(key);
+  wipe(key);
+  const uploads = new Set();
+  let failed = false;
+  for (let i = 0; i < total && !failed; i++) {
+    let chunk = new Uint8Array(await blob.slice(i * CHUNK, (i + 1) * CHUNK).arrayBuffer());
+    if (i === total - 1) {
+      const padded = new Uint8Array(Math.max(16384, Math.ceil(chunk.length / 16384) * 16384));
+      padded.set(chunk);
+      padded.set(rand(padded.length - chunk.length), chunk.length);
+      chunk = padded;
+    }
+    const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv: chunkIv(i), additionalData: chunkAad(idBytes, i, total) }, aes, chunk));
+    const up = uploadChunk(id, i, ct).catch(() => { failed = true; }).finally(() => uploads.delete(up));
+    uploads.add(up);
+    while (uploads.size >= 3) await Promise.race(uploads);
+  }
+  await Promise.all(uploads);
+  if (failed) throw new Error('upload');
+  return { id, name: String(name || 'file').slice(0, 200), mime: blob.type, size: blob.size, total, key: keyB64 };
+}
+
+function validEditFile(f) {
+  if (!f || typeof f !== 'object' || typeof f.id !== 'string' || !/^[A-Za-z0-9_-]{16}$/.test(f.id)) return null;
+  if (!Number.isInteger(f.size) || f.size < 0 || f.size > MAX_FILE || f.total !== Math.max(1, Math.ceil(f.size / CHUNK)) || typeof f.key !== 'string') return null;
+  const mime = typeof f.mime === 'string' ? f.mime.slice(0, 100) : '';
+  const kind = kindOf(mime);
+  if (kind !== 'image' && kind !== 'video') return null;
+  return { id: f.id, name: String(f.name || 'file').slice(0, 200), mime, size: f.size, total: f.total, key: f.key, kind };
+}
+
+function applyEdit(ev, localBlob = null) {
+  if (typeof ev.id !== 'string' || typeof ev.target !== 'string') return;
   const entry = messages.get(ev.target);
+  if (entry && MEDIA_EDIT.has(entry.kind)) { applyMediaEdit(entry, ev, localBlob); return; }
+  if (typeof ev.body !== 'string' || !ev.body.trim()) {
+    if (!entry && (typeof ev.caption === 'string' || ev.file)) { // a media edit for a message not loaded yet
+      const list = pendingEdits.get(ev.target) || [];
+      if (list.length < 20) list.push(ev);
+      pendingEdits.set(ev.target, list);
+    }
+    return;
+  }
   if (!entry) {
     const list = pendingEdits.get(ev.target) || [];
     if (list.length < 20) list.push(ev);
@@ -1212,6 +1323,94 @@ function applyEdit(ev) {
   entry.snippet = entry.body.slice(0, 40);
   renderEdited(entry);
   scheduleChatRow();
+}
+
+function applyMediaEdit(entry, ev, localBlob) {
+  const author = entry.dir === 'out' ? myDev : entry.from;
+  if (ev.a !== author) return; // only the author
+  const file = ev.file ? validEditFile(ev.file) : null;
+  if (ev.file && !file) return;
+  const caption = typeof ev.caption === 'string' ? ev.caption.trim().slice(0, 1000) : null;
+  if (!file && caption === null) return;
+  entry.editIds ??= new Set();
+  if (entry.editIds.has(ev.id)) return;
+  entry.editIds.add(ev.id);
+  entry.versions ??= [{ ts: entry.ts, caption: entry.caption || '', url: entry.url, blob: entry.blob, kind: entry.kind, meta: entry.meta }];
+  const ts = Number(ev.ts) || Date.now();
+  const before = [...entry.versions].filter((v) => v.ts <= ts).pop() || entry.versions[0];
+  const v = { ts, caption: caption ?? before.caption, url: null, blob: null, kind: before.kind, meta: before.meta, file };
+  if (!file) { v.url = before.url; v.blob = before.blob; }
+  else v.kind = file.kind;
+  entry.versions.push(v);
+  entry.versions.sort((x, y) => x.ts - y.ts);
+  const cur = entry.versions[entry.versions.length - 1];
+  entry.caption = cur.caption;
+  tagEdited(entry, cur.ts);
+  if (cur !== v || !file) { showMediaVersion(entry); return; }
+  if (localBlob) { v.blob = localBlob; showMediaVersion(entry); return; }
+  // Someone else's new photo: fetch it from the server (encrypted at rest).
+  const meta = { id: file.id, total: file.total, size: file.size, mime: file.mime, kind: file.kind };
+  fetchRemoteBlob(meta, file.key, () => messages.has(entry.id))
+    .then((blob) => { if (blob && messages.has(entry.id)) { v.blob = blob; showMediaVersion(entry); } })
+    .catch(() => {});
+}
+
+// Show the newest version: its media (if it has arrived) and caption, with
+// the earlier photos and captions under it.
+function showMediaVersion(entry) {
+  const cur = entry.versions[entry.versions.length - 1];
+  const shown = [...entry.versions].reverse().find((x) => x.blob) || entry.versions[0];
+  if (shown.blob && shown.blob !== entry.blob) {
+    entry.url = null; // finalizeMediaBody makes a fresh URL; older ones stay with their versions
+    entry.blob = shown.blob;
+    const meta = { ...(entry.meta || {}), kind: shown.kind, mime: shown.blob.type || entry.meta?.mime };
+    entry.kind = shown.kind;
+    finalizeMedia(entry, shown.blob, meta);
+    shown.url = entry.url;
+  } else {
+    entry.content.querySelector(':scope > .caption')?.remove();
+    if (cur.caption) entry.content.append(el('div', 'body caption', cur.caption));
+    entry.el.classList.toggle('captioned', !!cur.caption);
+    renderMediaPrev(entry);
+  }
+  scheduleChatRow();
+}
+
+function renderMediaPrev(entry) {
+  entry.content.querySelector(':scope > .edit-prev')?.remove();
+  const vs = entry.versions || [];
+  if (vs.length < 2) return;
+  const box = el('div', 'edit-prev');
+  box.append(el('div', 'edit-prev-label', 'قبل از ویرایش'));
+  const curUrl = entry.url;
+  for (const v of vs.slice(0, -1).reverse().slice(0, 5)) {
+    const row = el('div', 'edit-prev-row');
+    if (v.blob && v.url !== curUrl) {
+      v.url ??= URL.createObjectURL(v.blob);
+      const t = el('div', 'edit-prev-media');
+      const m = v.kind === 'video' ? document.createElement('video') : new Image();
+      m.src = v.url;
+      if (m.tagName === 'VIDEO') { m.muted = true; m.preload = 'metadata'; }
+      m.draggable = false;
+      t.append(m);
+      // Earlier photos stay blurred like every photo here; hold to look.
+      t.addEventListener('pointerdown', (e) => { e.stopPropagation(); t.classList.add('show'); });
+      for (const evName of ['pointerup', 'pointerleave', 'pointercancel']) t.addEventListener(evName, () => t.classList.remove('show'));
+      row.append(t);
+    }
+    if (v.caption) row.append(el('div', 'edit-prev-text', v.caption));
+    if (row.childElementCount) box.append(row);
+  }
+  if (box.childElementCount > 1) entry.content.append(box);
+}
+
+function tagEdited(entry, ts) {
+  let tag = entry.el.querySelector('.meta .edited');
+  if (!tag) {
+    tag = el('span', 'edited', 'ویرایش‌شده');
+    entry.el.querySelector('.meta .time')?.before(tag);
+  }
+  tag.title = new Date(ts).toLocaleString('fa-IR', { dateStyle: 'medium', timeStyle: 'short' });
 }
 
 function renderEdited(entry) {
@@ -1347,7 +1546,7 @@ function makeStack(dir) {
   const stack = { dir, el: li, members: [], visible: false };
   li._stack = stack;
   li.onclick = () => {
-    const firstNew = stack.members.findIndex((m) => !m.react.me && !m.reply.me && m.dir === 'in');
+    const firstNew = stack.members.findIndex((m) => !answered(m) && m.dir === 'in');
     openIgModal(stack.members, firstNew >= 0 ? firstNew : stack.members.length - 1, stack);
   };
   bindLongPress(li, () => li.onclick());
@@ -1400,7 +1599,7 @@ function renderStack(stack) {
   const info = el('div', 'stack-info');
   const brand = el('div', 'ig-brand');
   brand.append(icon('insta'), document.createTextNode(`${fa(members.length)} پست اینستاگرام`));
-  const pending = members.filter((m) => m.dir === 'in' && !m.react.me && !m.reply.me).length;
+  const pending = members.filter((m) => m.dir === 'in' && !answered(m)).length;
   const sub = el('div', 'stack-sub', stack.dir === 'in' && pending ? `${fa(pending)} پست بدون ری‌اکشن شما · بزنید` : 'برای دیدن و ری‌اکشن بزنید');
   info.append(brand, sub);
 
@@ -1490,11 +1689,11 @@ function renderIgModal() {
   $('igm-title').hidden = hasReplies;
   $('igm-title').textContent = p.title || 'پست اینستاگرام';
   $('igm-replies').hidden = !hasReplies;
-  fillReplies($('igm-replies'), entry);
+  fillReplies($('igm-replies'), entry, true);
   if (igModal.shownId !== entry.id) {
     igModal.shownId = entry.id;
     $('igm-text').value = '';
-    $('igm-text').placeholder = entry.reply.me ? 'ویرایش پاسخ شما…' : 'یک پیام هم بنویسید (اختیاری)…';
+    stopNoteEdit();
   }
   $('igm-note').hidden = !entry.note;
   $('igm-note').textContent = entry.note || '';
@@ -1534,7 +1733,7 @@ function renderIgModal() {
   $('igm-next').disabled = igModal.index === live.length - 1;
   const dots = $('igm-dots');
   dots.textContent = '';
-  if (many && live.length <= 12) for (let i = 0; i < live.length; i++) dots.append(el('i', i === igModal.index ? 'on' : live[i].react.me || live[i].reply.me ? 'done' : ''));
+  if (many && live.length <= 12) for (let i = 0; i < live.length; i++) dots.append(el('i', i === igModal.index ? 'on' : answered(live[i]) ? 'done' : ''));
 }
 
 function igStep(d) {
@@ -1716,23 +1915,104 @@ function setReaction(entry, e, text) {
   return true;
 }
 
-// A written reply to an Instagram post replaces the post caption in previews.
+// Written replies to an Instagram post replace the post caption in previews.
+// Older clients sent one reply per person inside the reaction (entry.reply);
+// now every note is its own item (entry.notes), added and edited separately,
+// and an edited note keeps its earlier wording, as messages do.
 function replyLines(entry) {
   const out = Object.entries(entry.reply.peers).filter(([, t]) => t)
     .map(([pid, t]) => ({ who: peerName(pid), e: entry.react.peers[pid] || '💬', t }));
   if (entry.reply.me) out.push({ who: 'شما', e: entry.react.me || '💬', t: entry.reply.me });
+  for (const n of noteList(entry)) {
+    const mine = n.a === myDev;
+    const vs = n.versions;
+    out.push({
+      who: mine ? 'شما' : peerName(n.a), e: (mine ? entry.react.me : entry.react.peers[n.a]) || '💬',
+      t: vs[vs.length - 1].t, prev: vs.slice(0, -1).reverse().map((v) => v.t), mine, rid: n.rid,
+    });
+  }
   return out;
+}
+
+const noteList = (entry) => [...(entry.notes?.values() || [])].sort((x, y) => x.ts - y.ts);
+const answered = (m) => !!(m.react.me || m.reply.me || noteList(m).some((n) => n.a === myDev));
+const pendingNotes = new Map(); // post id -> notes that arrived before the post
+
+function applyNote(ev) {
+  if (typeof ev.id !== 'string' || typeof ev.target !== 'string' || typeof ev.rid !== 'string' || !/^[A-Za-z0-9_-]{16}$/.test(ev.rid)) return null;
+  if (typeof ev.t !== 'string' || !ev.t.trim() || !PID_RE.test(ev.a || '')) return null;
+  const entry = messages.get(ev.target);
+  if (!entry) {
+    const list = pendingNotes.get(ev.target) || [];
+    if (list.length < 40) list.push(ev);
+    pendingNotes.set(ev.target, list);
+    return null;
+  }
+  if (!entry.preview) return null;
+  entry.notes ??= new Map();
+  let n = entry.notes.get(ev.rid);
+  if (n && n.eids.has(ev.id)) return null; // the live copy and the stored copy
+  if (n && n.a !== ev.a) return null;     // only its author edits a note
+  const ts = Number(ev.ts) || Date.now();
+  const isNew = !n;
+  if (!n) { n = { rid: ev.rid, a: ev.a, ts, versions: [], eids: new Set() }; entry.notes.set(ev.rid, n); }
+  n.eids.add(ev.id);
+  n.ts = Math.min(n.ts, ts);
+  rememberName(ev.a, ev.an);
+  n.versions.push({ t: ev.t.trim().slice(0, 500), ts });
+  n.versions.sort((x, y) => x.ts - y.ts);
+  updateIgCaption(entry);
+  if (entry.stack) renderStack(entry.stack);
+  if (igModal) renderIgModal();
+  return { note: n, isNew };
+}
+
+function sendNote(entry, text, rid = null) {
+  const eid = b64u(rand(12));
+  const ev = { id: eid, target: entry.id, rid: rid || eid, a: myDev, an: myName, t: text.trim().slice(0, 500), ts: Date.now() };
+  const r = applyNote(ev);
+  if (!r) return false;
+  if (r.isNew) activity('me', entry, ev.t);
+  if (anySecure()) post({ k: 'note', id: entry.id, eid, rid: ev.rid, t: ev.t, ts: ev.ts, a: myDev, an: myName }).catch(() => {});
+  storeEvent({ k: 'note', ...ev }).catch(() => toast('ذخیره‌ی پیام روی سرور انجام نشد'));
+  return true;
 }
 
 const reactionList = (entry) => [...Object.values(entry.react.peers), entry.react.me].filter(Boolean);
 
-function fillReplies(box, entry) {
+function fillReplies(box, entry, editable = false) {
   box.textContent = '';
   for (const r of replyLines(entry)) {
     const line = el('div', 'ig-reply');
     line.append(el('span', 'who', r.who), el('span', 'emo', r.e), el('span', 'txt', r.t));
+    if (r.prev?.length) {
+      line.classList.add('edited');
+      const prev = el('div', 'ig-reply-prev');
+      for (const t of r.prev.slice(0, 5)) prev.append(el('div', 'edit-prev-text', t));
+      line.append(prev);
+    }
+    if (editable && r.mine && r.rid) {
+      line.classList.add('mine');
+      line.title = 'برای ویرایش بزنید';
+      line.onclick = (e) => { e.stopPropagation(); startNoteEdit(entry, r.rid, r.t); };
+    }
     box.append(line);
   }
+}
+
+let noteEditing = null; // { entryId, rid } while the sheet's box edits one of my notes
+function startNoteEdit(entry, rid, text) {
+  noteEditing = { entryId: entry.id, rid };
+  const box = $('igm-text');
+  box.value = text;
+  box.placeholder = 'ویرایش پیام شما…';
+  box.classList.add('editing');
+  box.focus();
+}
+function stopNoteEdit() {
+  noteEditing = null;
+  $('igm-text').classList.remove('editing');
+  $('igm-text').placeholder = 'یک پیام بنویسید…';
 }
 
 function updateIgCaption(entry) {
@@ -1760,10 +2040,10 @@ function renderReacts(entry) {
 
 // Reaction activity lines. Three or more in a row collapse into one summary
 // row so a burst of reactions to Instagram posts doesn't flood the chat.
-function activity(actor, entry) {
+function activity(actor, entry, noteText = null) {
   if (entry.acts[actor]) { removeAct(entry.acts[actor]); entry.acts[actor] = null; }
-  const e = actor === 'me' ? entry.react.me : entry.react.peers[actor];
-  const text = actor === 'me' ? entry.reply.me : entry.reply.peers[actor];
+  const e = noteText ? null : actor === 'me' ? entry.react.me : entry.react.peers[actor];
+  const text = noteText ?? (actor === 'me' ? entry.reply.me : entry.reply.peers[actor]);
   if (!e && !text) return;
   const a = el('div', 'act');
   const mini = el('span', 'mini');
@@ -1874,8 +2154,70 @@ async function stripImage(file) {
   }
 }
 
+// Photos and videos open a small sheet first (Signal-style) for a caption;
+// text already typed in the composer becomes the caption. Other files go now.
 async function sendFiles(files) {
-  for (const f of files) await sendFile(f);
+  if (!files.length) return;
+  const media = files.filter((f) => /^(image|video)\//.test(f.type));
+  let caption = '';
+  if (media.length) {
+    caption = await askCaption(media);
+    if (caption === null) return; // cancelled
+  }
+  const reply = replyTo;
+  clearReply();
+  let first = true;
+  for (const f of files) {
+    const isMedia = media.includes(f);
+    await sendFile(f, false, { reply: first ? reply : null, caption: isMedia && caption && f === media[0] ? caption : '' });
+    first = false;
+  }
+}
+
+function askCaption(media) {
+  return new Promise((resolve) => {
+    const sheet = el('div', 'sheet cap-sheet');
+    const card = el('div', 'sheet-card');
+    const urls = [];
+    const strip = el('div', 'cap-strip');
+    for (const f of media.slice(0, 6)) {
+      const url = URL.createObjectURL(f);
+      urls.push(url);
+      const m = f.type.startsWith('video/') ? document.createElement('video') : new Image();
+      m.src = url;
+      if (m.tagName === 'VIDEO') { m.muted = true; m.preload = 'metadata'; }
+      strip.append(m);
+    }
+    const title = el('div', 'sheet-title', media.length > 1 ? `${fa(media.length)} عکس/ویدیو` : media[0].type.startsWith('video/') ? 'ارسال ویدیو' : 'ارسال عکس');
+    const box = document.createElement('textarea');
+    box.className = 'cap-input';
+    box.rows = 2;
+    box.maxLength = 1000;
+    box.placeholder = 'توضیح (اختیاری)…';
+    const input = $('input');
+    box.value = input.value.trim();
+    const send = el('button', 'sheet-btn', 'ارسال');
+    send.type = 'button';
+    const cancel = el('button', 'sheet-btn muted', 'لغو');
+    cancel.type = 'button';
+    card.append(title, strip, box, send, cancel);
+    sheet.append(card);
+    document.body.append(sheet);
+    setTimeout(() => box.focus(), 50);
+    const done = (v) => {
+      sheet.remove();
+      for (const u of urls) URL.revokeObjectURL(u);
+      if (v !== null && box.value.trim() && box.value.trim() === input.value.trim()) { input.value = ''; autoGrow(); }
+      resolve(v);
+    };
+    send.onclick = () => done(box.value.trim());
+    cancel.onclick = () => done(null);
+    sheet.onclick = (e) => { if (e.target === sheet) done(null); };
+    box.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && matchMedia('(pointer: fine)').matches) { e.preventDefault(); send.click(); }
+      if (e.key === 'Escape') cancel.click();
+    });
+  });
 }
 
 // extra (voice messages only): { voice: true, dur: seconds, wave: b64 levels, reply }
@@ -1897,8 +2239,9 @@ async function sendFile(file, gif = false, extra = null) {
   if (kind === 'voice') {
     meta.dur = Math.max(0, Math.min(VOICE_MAX_S, Math.round(extra.dur || 0)));
     if (extra.wave) meta.wave = extra.wave;
-    if (extra.reply) meta.reply = extra.reply;
   }
+  if (extra?.reply) meta.reply = extra.reply;
+  if (extra?.caption && CAPTION_KINDS.has(kind)) meta.caption = extra.caption.trim().slice(0, 1000);
   const aes = await subtle.importKey('raw', key, 'AES-GCM', false, ['encrypt']);
   wipe(key);
 
@@ -1954,7 +2297,11 @@ function renderFile(meta, dir) {
   const prog = el('div', 'progress');
   prog.append(el('i'));
   box.append(prog);
+  entry.meta = meta;
+  entry.caption = meta.caption || '';
+  if (meta.reply && meta.kind !== 'voice') { entry.quote = meta.reply; entry.content.append(quoteBlock(meta.reply)); }
   entry.content.append(box);
+  if (entry.caption) entry.content.append(el('div', 'body caption', entry.caption));
   entry.loading = box;
   return entry;
 }
@@ -1968,8 +2315,28 @@ function showProgress(entry) {
   return bar;
 }
 
+const CAPTION_KINDS = new Set(['image', 'video', 'gif']);
+const captionOf = (o, kind) => (CAPTION_KINDS.has(kind) && typeof o.caption === 'string' ? o.caption.trim().slice(0, 1000) : '');
+
 function finalizeMedia(entry, blob, meta) {
+  if (entry.versions && !entry.versions.some((v) => v.blob === blob)) {
+    // The original arrived after an edit: keep it as the first version and
+    // show the newest one that has arrived.
+    entry.versions[0].blob = blob;
+    const latest = [...entry.versions].reverse().find((v) => v.blob);
+    if (latest !== entry.versions[0]) { entry.blob = null; showMediaVersion(entry); return; }
+  }
   entry.content.textContent = '';
+  if (meta.reply && meta.kind !== 'voice') entry.content.append(quoteBlock(meta.reply));
+  finalizeMediaBody(entry, blob, meta);
+  entry.blob ??= blob;
+  const cap = entry.caption ?? meta.caption ?? '';
+  entry.el.classList.toggle('captioned', !!cap && CAPTION_KINDS.has(meta.kind));
+  if (cap && CAPTION_KINDS.has(meta.kind)) entry.content.append(el('div', 'body caption', cap));
+  if (entry.versions) renderMediaPrev(entry);
+}
+
+function finalizeMediaBody(entry, blob, meta) {
   const kind = meta.kind;
   if (kind === 'voice') {
     renderVoice(entry, blob, meta);
@@ -2003,6 +2370,7 @@ function finalizeMedia(entry, blob, meta) {
     // Deliberately tiny and low-resolution: unreadable from beside you or
     // through another phone's zoom.
     entry.url = URL.createObjectURL(blob);
+    entry.blob = blob;
     const img = new Image();
     img.src = entry.url;
     img.className = 'gif-mini';
@@ -2070,7 +2438,8 @@ async function onFileMeta(s, o) {
   const isGif = o.kind === 'gif' && /^image\/(gif|webp)$/.test(mime) && o.size <= 2 * 1024 * 1024;
   const vf = isGif ? null : voiceFields(o, mime);
   rememberName(o.a, o.an);
-  const meta = { from: authorOf(s, o), id: o.id, ts: o.ts, name: String(o.name || 'file').slice(0, 200), mime, size: o.size, total: o.total, ttl: clampTtl(o.ttl), kind: isGif ? 'gif' : vf ? 'voice' : kindOf(mime), ...vf };
+  const kind = isGif ? 'gif' : vf ? 'voice' : kindOf(mime);
+  const meta = { from: authorOf(s, o), id: o.id, ts: o.ts, name: String(o.name || 'file').slice(0, 200), mime, size: o.size, total: o.total, ttl: clampTtl(o.ttl), kind, reply: sanitizeReply(o.reply), caption: captionOf(o, kind), ...vf };
   const entry = renderFile(meta, 'in');
   incoming.set(o.id, { from: s.peer, meta, key, idBytes: unb64u(o.id), parts: new Array(o.total), got: 0, entry, lastAt: Date.now() });
   bumpUnread();
@@ -2284,6 +2653,15 @@ function screenshotAttempt() {
 // ---------- auto-lock ----------
 // Leaving the page (minimize, app switch, screen off) locks the room; the
 // password is needed again. Too many wrong tries wipe everything.
+let pickingUntil = 0;
+let pickLockTimer = 0;
+function lockSoon() {
+  const wait = pickingUntil - Date.now();
+  if (wait <= 0) { lockNow(); return; }
+  clearTimeout(pickLockTimer);
+  pickLockTimer = setTimeout(() => { if (document.hidden) lockNow(); }, wait);
+}
+
 function lockNow() {
   if (locked || $('chat').hidden || !room.verifier) return;
   locked = true;
@@ -2873,7 +3251,11 @@ async function uploadChunk(id, i, ct) {
 // Delete for everyone: from the server, from the other devices, from here.
 async function deleteForAll(ids) {
   if (!ids.length) return;
-  const r = await storeFetch('/h/del', { method: 'POST', body: JSON.stringify({ ids }) }).catch(() => null);
+  const all = [...new Set(ids.flatMap((id) => {
+    const m = messages.get(id);
+    return [id, ...(m?.editIds || []), ...noteList(m || {}).flatMap((n) => [...n.eids])]; // its edits, their files and notes too
+  }))];
+  const r = await storeFetch('/h/del', { method: 'POST', body: JSON.stringify({ ids: all }) }).catch(() => null);
   if (!r || !r.ok) { toast('حذف از سرور انجام نشد'); return false; }
   if (anySecure()) post({ k: 'del', ids }).catch(() => {});
   for (const id of ids) { const m = messages.get(id); if (m) removeEntry(m); }
@@ -2931,11 +3313,14 @@ function afterHistoryEntry(entry, ev, dir) {
   if (pend) { pendingReacts.delete(entry.id); for (const r of pend) applyReaction(r, true); }
   const edits = pendingEdits.get(entry.id);
   if (edits) { pendingEdits.delete(entry.id); for (const e of edits) applyEdit(e); }
+  const notes = pendingNotes.get(entry.id);
+  if (notes) { pendingNotes.delete(entry.id); for (const n of notes) applyNote(n); }
 }
 
 function applyHistory(ev) {
   if (ev.k === 'react') { applyReaction(ev, true); return; }
   if (ev.k === 'edit') { applyEdit(ev); return; }
+  if (ev.k === 'note') { applyNote(ev); return; }
   if (ev.k === 'seen') { applySeen(ev); return; }
   if (messages.has(ev.id) || seen.has(ev.id)) return;
   if (ev.k === 'text') {
@@ -2953,7 +3338,8 @@ function applyHistory(ev) {
     const mime = typeof ev.mime === 'string' ? ev.mime.slice(0, 100) : '';
     const isGif = ev.kind === 'gif' && /^image\/(gif|webp)$/.test(mime) && ev.size <= 2 * 1024 * 1024;
     const vf = isGif ? null : voiceFields(ev, mime);
-    const meta = { from: dir === 'in' ? ev.a : null, id: ev.id, ts: ev.ts, name: String(ev.name || 'file').slice(0, 200), mime, size: ev.size, total: ev.total, ttl: clampTtl(ev.ttl), kind: isGif ? 'gif' : vf ? 'voice' : kindOf(mime), ...vf };
+    const kind = isGif ? 'gif' : vf ? 'voice' : kindOf(mime);
+    const meta = { from: dir === 'in' ? ev.a : null, id: ev.id, ts: ev.ts, name: String(ev.name || 'file').slice(0, 200), mime, size: ev.size, total: ev.total, ttl: clampTtl(ev.ttl), kind, reply: sanitizeReply(ev.reply), caption: captionOf(ev, kind), ...vf };
     const entry = renderFile(meta, dir);
     entry.ready = false;
     entry.remote = { meta, key: ev.key };
@@ -2973,26 +3359,34 @@ const blobObserver = new IntersectionObserver((list) => {
   }
 }, { rootMargin: '400px' });
 
+// Fetch and decrypt a stored file. `alive()` false stops early (message gone).
+async function fetchRemoteBlob(meta, keyB64, alive, onProgress) {
+  const aes = await subtle.importKey('raw', unb64u(keyB64), 'AES-GCM', false, ['decrypt']);
+  const idBytes = unb64u(meta.id);
+  const parts = [];
+  for (let i = 0; i < meta.total; i++) {
+    if (!alive()) return null;
+    const r = await storeFetch(`/h/blob/${meta.id}/${i}`, { timeout: 90000 });
+    if (!r.ok) throw new Error('missing');
+    const ct = new Uint8Array(await r.arrayBuffer());
+    const pt = new Uint8Array(await subtle.decrypt({ name: 'AES-GCM', iv: chunkIv(i), additionalData: chunkAad(idBytes, i, meta.total) }, aes, ct));
+    parts.push(pt.subarray(0, i < meta.total - 1 ? CHUNK : meta.size - (meta.total - 1) * CHUNK));
+    onProgress?.((i + 1) / meta.total);
+  }
+  return new Blob(parts, { type: meta.kind === 'file' ? 'application/octet-stream' : meta.mime });
+}
+
 async function downloadRemote(entry) {
   const job = entry.remote;
   entry.remote = null;
   const { meta } = job;
   try {
-    const aes = await subtle.importKey('raw', unb64u(job.key), 'AES-GCM', false, ['decrypt']);
-    const idBytes = unb64u(meta.id);
-    const parts = [];
-    for (let i = 0; i < meta.total; i++) {
-      if (!messages.has(meta.id)) return;
-      const r = await storeFetch(`/h/blob/${meta.id}/${i}`, { timeout: 90000 });
-      if (!r.ok) throw new Error('missing');
-      const ct = new Uint8Array(await r.arrayBuffer());
-      const pt = new Uint8Array(await subtle.decrypt({ name: 'AES-GCM', iv: chunkIv(i), additionalData: chunkAad(idBytes, i, meta.total) }, aes, ct));
-      parts.push(pt.subarray(0, i < meta.total - 1 ? CHUNK : meta.size - (meta.total - 1) * CHUNK));
+    const blob = await fetchRemoteBlob(meta, job.key, () => messages.has(meta.id), (f) => {
       const bar = entry.loading?.querySelector('.progress i');
-      if (bar) bar.style.width = `${((i + 1) / meta.total) * 100}%`;
-    }
-    if (!messages.has(meta.id)) return;
-    finalizeMedia(entry, new Blob(parts, { type: meta.kind === 'file' ? 'application/octet-stream' : meta.mime }), meta);
+      if (bar) bar.style.width = `${f * 100}%`;
+    });
+    if (!blob || !messages.has(meta.id)) return;
+    finalizeMedia(entry, blob, meta);
     entry.ready = true;
     if (entry.dir === 'in' && !entry.readSent) watchRead(entry);
   } catch {
@@ -3031,8 +3425,9 @@ async function loadHistory(initial, limit = 120) {
     const prevTop = list.scrollTop;
     insertAnchor = [...list.children].find((c) => c.id !== 'load-older') || null;
     try {
-      for (const ev of events) if (ev.k !== 'react' && ev.k !== 'seen' && ev.k !== 'edit') applyHistory(ev);
-      for (const ev of events) if (ev.k === 'react' || ev.k === 'seen' || ev.k === 'edit') applyHistory(ev);
+      const later = (k) => k === 'react' || k === 'seen' || k === 'edit' || k === 'note'; // need their message first
+      for (const ev of events) if (!later(ev.k)) applyHistory(ev);
+      for (const ev of events) if (later(ev.k)) applyHistory(ev);
       mergeIgSeam(insertAnchor);
     } finally {
       insertAnchor = null;
@@ -3395,30 +3790,50 @@ function buildGifTopics() {
   }
 }
 
+// One search = page 0, then more pages (the server's related searches) as the
+// grid scrolls near its end. GIFs already shown are never added twice.
+const gifRun = { q: '', page: 0, more: false, loading: false, shown: new Set() };
+
 async function searchGifs(q) {
   q = q.trim();
   if (!q) return;
   const seq = ++gifSeq;
+  Object.assign(gifRun, { q, page: 0, more: false, loading: true, shown: new Set() });
   const grid = $('gif-grid');
-  grid.textContent = '';
-  grid.append(el('div', 'gif-msg', 'در حال جستجو…'));
-  let items = null;
-  let err = '';
-  try {
-    const ask = () => fetch('/gif/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ q }), credentials: 'omit', cache: 'no-store', signal: AbortSignal.timeout(12000) });
-    const r = await ask().catch(() => ask()); // one retry if the first request stalls
-    if (r.status === 429) err = 'سقف جستجوی این ساعت پر شده؛ کمی بعد دوباره امتحان کنید';
-    else if (!r.ok) err = 'جستجو انجام نشد';
-    else items = (await r.json()).items;
-  } catch {
-    err = 'جستجو انجام نشد';
-  }
-  if (seq !== gifSeq) return;
   resetGifPreviews();
   grid.textContent = '';
-  if (err || !items?.length) { grid.append(el('div', 'gif-msg', err || 'چیزی پیدا نشد')); return; }
+  grid.scrollTop = 0;
+  grid.append(el('div', 'gif-msg', 'در حال جستجو…'));
+  const { items, more, err } = await fetchGifPage(q, 0);
+  if (seq !== gifSeq) return;
+  grid.textContent = '';
+  gifRun.loading = false;
+  gifRun.more = more;
+  if (err || !items.length) { grid.append(el('div', 'gif-msg', err || 'چیزی پیدا نشد')); return; }
+  addGifCells(items);
+  maybeMoreGifs();
+}
+
+async function fetchGifPage(q, page) {
+  try {
+    const ask = () => fetch('/gif/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ q, page }), credentials: 'omit', cache: 'no-store', signal: AbortSignal.timeout(15000) });
+    const r = await ask().catch(() => ask()); // one retry if the first request stalls
+    if (r.status === 429) return { items: [], more: false, err: 'سقف جستجوی این ساعت پر شده؛ کمی بعد دوباره امتحان کنید' };
+    if (!r.ok) return { items: [], more: false, err: 'جستجو انجام نشد' };
+    const j = await r.json();
+    return { items: Array.isArray(j.items) ? j.items : [], more: !!j.more, err: '' };
+  } catch {
+    return { items: [], more: false, err: 'جستجو انجام نشد' };
+  }
+}
+
+function addGifCells(items) {
+  const grid = $('gif-grid');
+  grid.querySelector('.gif-more')?.remove();
   for (const it of items) {
     if (typeof it.thumb !== 'string' || !it.thumb.startsWith('/gif/m?') || typeof it.send !== 'string' || !it.send.startsWith('/gif/m?')) continue;
+    if (gifRun.shown.has(it.send)) continue;
+    gifRun.shown.add(it.send);
     const b = el('button', 'gif-cell loading');
     b.type = 'button';
     b._src = it.send;
@@ -3426,6 +3841,23 @@ async function searchGifs(q) {
     grid.append(b);
     gifObserver().observe(b);
   }
+  if (gifRun.more) grid.append(el('div', 'gif-msg gif-more', 'در حال آوردن گیف‌های بیشتر…'));
+}
+
+async function maybeMoreGifs() {
+  const grid = $('gif-grid');
+  if (!gifRun.more || gifRun.loading || grid.scrollHeight - grid.scrollTop - grid.clientHeight > 400) return;
+  gifRun.loading = true;
+  const seq = gifSeq;
+  const page = gifRun.page + 1;
+  const { items, more } = await fetchGifPage(gifRun.q, page);
+  if (seq !== gifSeq) return;
+  gifRun.page = page;
+  gifRun.more = more;
+  gifRun.loading = false;
+  addGifCells(items);
+  if (!items.length && more) maybeMoreGifs(); // a related search with nothing new: try the next
+  else if (!more) grid.querySelector('.gif-more')?.remove();
 }
 
 // Previews play: each cell shows the same tiny animated file that would be
@@ -3489,9 +3921,11 @@ function resetGifPreviews() {
 
 async function pickGif(src) {
   closePanels();
+  const reply = replyTo; // a GIF picked while replying is that reply
+  clearReply();
   try {
     const blob = gifPrev.blobs.get(src) || await fetchGif(src);
-    await sendFile(new File([blob], blob.type === 'image/gif' ? 'gif.gif' : 'gif.webp', { type: blob.type }), true);
+    await sendFile(new File([blob], blob.type === 'image/gif' ? 'gif.gif' : 'gif.webp', { type: blob.type }), true, { reply });
   } catch {
     toast('ارسال گیف انجام نشد');
   }
@@ -4243,7 +4677,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-16.6';
+const APP_VERSION = '2026-10-16.7';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.
@@ -4404,11 +4838,28 @@ function renderEmojiGroups() {
   body.textContent = '';
   const groups = emojiIndex ? emojiIndex.g : Object.entries(EMOJI_FALLBACK).map(([t, l]) => [t, l.split(' ')]);
   if (q) {
-    const hits = [];
-    for (const [, list] of groups) for (const g of list) if ((emojiIndex?.n?.[g] || '').toLowerCase().includes(q) || g === q) hits.push(g);
+    // English names plus CLDR keywords in English and Persian; whole-word hits
+    // first, then prefixes, then anything containing the text.
+    const fq = MG_FOLD(q);
+    const scored = [];
+    for (const [, list] of groups) for (const g of list) {
+      if (g === q) { scored.push([9, g]); continue; }
+      const name = MG_FOLD(emojiIndex?.n?.[g] || '');
+      const words = [...name.split(' '), ...MG_FOLD(emojiIndex?.k?.[g] || '').split('|')];
+      let score = 0;
+      for (const w of words) {
+        if (!w) continue;
+        if (w === fq) { score = 3; break; }
+        if (w.startsWith(fq)) score = Math.max(score, 2);
+        else if (w.includes(fq)) score = Math.max(score, 1);
+      }
+      if (!score && name.includes(fq)) score = 1;
+      if (score) scored.push([score, g]);
+    }
+    const hits = scored.sort((x, y) => y[0] - x[0]).map(([, g]) => g); // stable: Unicode order within a score
     const grid = el('div', 'emoji-grid');
     for (const g of hits.slice(0, 300)) grid.append(emojiButton(toned(g)));
-    body.append(hits.length ? grid : el('p', 'emo-none', 'ایموجی‌ای پیدا نشد (نام‌ها انگلیسی‌اند، مثلاً heart)'));
+    body.append(hits.length ? grid : el('p', 'emo-none', 'ایموجی‌ای پیدا نشد'));
     return;
   }
   const sections = emojiRecent.length ? [['اخیر', emojiRecent], ...groups] : groups;
@@ -4429,7 +4880,7 @@ function buildEmojiPanel() {
   const search = el('label', 'emo-search');
   const input = document.createElement('input');
   input.type = 'search';
-  input.placeholder = 'جستجوی ایموجی';
+  input.placeholder = 'جستجوی ایموجی (فارسی یا انگلیسی)';
   input.autocomplete = 'off';
   input.oninput = () => renderEmojiGroups();
   search.append(icon('search'), input);
@@ -4465,7 +4916,9 @@ function openEmojiPicker(onPick = null) {
   const p = $('emoji-panel');
   p.classList.toggle('pick-mode', !!onPick);
   p.hidden = false;
-  if (onPick) renderEmojiGroups(); // recents first, fresh
+  const search = p.querySelector('.emo-search input');
+  if (search?.value) { search.value = ''; renderEmojiGroups(); } // each opening starts unfiltered
+  else if (onPick) renderEmojiGroups(); // recents first, fresh
 }
 function closeEmojiPicker() {
   pickHandler = null;
@@ -5340,6 +5793,7 @@ function bindUi() {
   };
   $('gif-panel').onclick = (e) => e.stopPropagation();
   $('gif-form').onsubmit = (e) => { e.preventDefault(); searchGifs($('gif-q').value); };
+  $('gif-grid').addEventListener('scroll', maybeMoreGifs, { passive: true });
   buildGifTopics();
   bindDoubleTap();
   bindSwipeReply();
@@ -5419,12 +5873,12 @@ function bindUi() {
     const entry = igModal.list[igModal.index];
     const text = $('igm-text').value.trim();
     if (!entry || !text) return;
-    if (!setReaction(entry, entry.react.me, text)) return;
+    const edit = noteEditing?.entryId === entry.id ? noteEditing.rid : null;
+    if (!sendNote(entry, text, edit)) return;
     $('igm-text').value = '';
+    stopNoteEdit();
     renderIgModal();
-    toast('پاسخ شما فرستاده شد');
-    // In a stack, move on to the next post.
-    if (igModal.index < igModal.list.length - 1) setTimeout(() => { if (igModal) { igModal.index++; renderIgModal(); } }, 500);
+    toast(edit ? 'پیام ویرایش شد' : 'پیام شما فرستاده شد');
   };
   window.addEventListener('keydown', (e) => {
     if (!igModal || e.target.closest?.('input, textarea')) return;
@@ -5486,13 +5940,17 @@ function bindUi() {
   window.addEventListener('focus', checkUpdate);
   window.addEventListener('online', checkUpdate);
   $('update-btn').onclick = applyUpdate;
+  // Choosing a photo, file or track hides the page behind the system picker;
+  // that must not lock the chat unless the picker stays open over a minute.
+  document.addEventListener('click', (e) => { if (e.target.closest?.('input[type=file]')) pickingUntil = Date.now() + 60000; }, true);
+  document.addEventListener('change', (e) => { if (e.target.matches?.('input[type=file]')) pickingUntil = 0; }, true);
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) checkUpdate();
-    if (document.hidden) lockNow();
+    if (!document.hidden) { checkUpdate(); clearTimeout(pickLockTimer); pickingUntil = 0; }
+    if (document.hidden) lockSoon();
     evaluateShield();
     if (!document.hidden && !locked) { unread = 0; updateTitle(); }
   });
-  window.addEventListener('pagehide', lockNow);
+  window.addEventListener('pagehide', lockSoon);
   window.addEventListener('blur', evaluateShield);
   window.addEventListener('focus', () => { evaluateShield(); if (!locked) { unread = 0; updateTitle(); } });
   window.addEventListener('keydown', (e) => {

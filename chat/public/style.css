@@ -954,7 +954,7 @@ img.emo { display: inline-block; width: 1.3em; height: 1.3em; vertical-align: -0
 .emo-btn img.emo { width: 32px; height: 32px; margin: 0; vertical-align: middle; }
 .emo-none { text-align: center; color: var(--text-3); font-size: 13px; padding: 24px 8px; }
 /* picking a reaction: float the picker in the middle of the chat */
-.emoji-panel.pick-mode { position: fixed; z-index: 40; inset: auto; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(420px, calc(100vw - 32px)); height: min(440px, 70dvh); box-shadow: var(--shadow-lg); animation: fade .15s; }
+.emoji-panel.pick-mode { position: fixed; z-index: 55; /* above the Instagram sheet (45) */ inset: auto; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(420px, calc(100vw - 32px)); height: min(440px, 70dvh); box-shadow: var(--shadow-lg); animation: fade .15s; }
 
 /* ---------- edited messages ---------- */
 /* The earlier wording sits under the message in its own colour (amber), so
@@ -982,4 +982,37 @@ body.veil .msg.peek .edit-prev-text, body.veil .msg.reveal .edit-prev-text { fil
 .update-bar span { flex: 1; min-width: 0; }
 .update-bar .btn { flex: none; background: #fff; color: var(--brand-1); border: 0; font-weight: 700; }
 @media (min-width: 1024px) { .update-bar { margin: 12px 22px 0; } }
+
+/* ---------- captions on photos / videos / GIFs ---------- */
+.msg .body.caption { padding: 6px 8px 0; font-size: 14.5px; }
+.msg.out.gif.captioned { background: var(--out-bg) !important; }
+.msg.in.gif.captioned { background: var(--in-bg) !important; }
+.msg.gif.captioned .meta { color: inherit; }
+.cap-sheet .sheet-card { display: flex; flex-direction: column; gap: 8px; }
+.cap-strip { display: flex; gap: 6px; overflow-x: auto; padding: 2px; }
+.cap-strip img, .cap-strip video { width: 88px; height: 88px; object-fit: cover; border-radius: 10px; flex: none; filter: blur(8px); }
+.cap-strip:hover img, .cap-strip:hover video { filter: none; }
+.cap-input { width: 100%; resize: none; border: 1px solid transparent; outline: none; border-radius: 12px; padding: 10px 12px; background: var(--surface-2); font: inherit; font-size: 15px; line-height: 1.6; }
+.cap-input:focus { border-color: var(--brand-1); }
+body.veil .cap-input:not(:focus) { filter: blur(4px); }
+
+/* earlier photos of an edited photo: blurred thumbnails, hold to look */
+.edit-prev-row { display: flex; gap: 8px; align-items: center; }
+.edit-prev-row + .edit-prev-row { margin-top: 4px; }
+.edit-prev-media { width: 56px; height: 56px; border-radius: 8px; overflow: hidden; flex: none; background: rgba(0,0,0,.2); cursor: pointer; touch-action: none; }
+.edit-prev-media img, .edit-prev-media video { width: 100%; height: 100%; object-fit: cover; filter: blur(7px) saturate(1.2); transform: scale(1.15); pointer-events: none; }
+.edit-prev-media.show img, .edit-prev-media.show video { filter: none; transform: none; }
+.msg.media .edit-prev { margin: 6px 6px 2px; }
+.reply-bar .edit-swap { flex: none; }
+
+/* notes under Instagram posts */
+.ig-reply { flex-wrap: wrap; }
+.ig-reply.mine { cursor: pointer; }
+.ig-reply.mine .txt::after { content: " ✎"; opacity: .55; font-size: 11px; }
+.ig-reply-prev { flex-basis: 100%; margin-top: 2px; padding-inline-start: 8px; border-inline-start: 2px solid currentColor; font-size: 12px; color: #b86e00; }
+@media (prefers-color-scheme: dark) { .ig-reply-prev { color: #f5b545; } }
+.msg.out .ig-reply-prev { color: #ffd88a; }
+body.veil .ig-reply-prev { filter: blur(5px); }
+body.veil #ig-modal.peek .ig-reply-prev { filter: none; }
+#igm-text.editing { border-color: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,.18); }
 
