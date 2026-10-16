@@ -4245,7 +4245,7 @@ async function pickGif(src) {
 let lastTouchTapAt = 0;
 function bindDoubleTap() {
   let last = null;
-  const ignore = 'input, textarea, button, a, select, .composer-wrap, .popover, .emoji-panel, .gif-panel, .media-wrap, .ig-card, .ig-stack, .act-run, .share-card, .react-bar, .voice-msg, .quote';
+  const ignore = 'input, textarea, button, a, select, .peer-name, .composer-wrap, .popover, .emoji-panel, .gif-panel, .media-wrap, .ig-card, .ig-stack, .act-run, .share-card, .react-bar, .voice-msg, .quote';
   $('chat').addEventListener('pointerup', (e) => {
     if (e.pointerType !== 'touch') return;
     if (touchIds.size > 0) { last = null; return; } // another finger still down: not a tap
@@ -4986,7 +4986,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-16.16';
+const APP_VERSION = '2026-10-16.17';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.
