@@ -2629,6 +2629,10 @@ function openViewer(entry, kind) {
   bar.append(fill);
   v.append(media, bar, el('div', 'hint', 'برای بستن رها کنید'));
   v.hidden = false;
+  if (noiseOn) {
+    media.classList.add('noise-src');
+    startViewerNoise(media, v);
+  }
   if (kind === 'video') media.play().catch(() => { media.muted = true; media.play().catch(() => {}); });
   const limit = VIEW_MS[kind] || 10000;
   let timer = null;
@@ -2650,6 +2654,7 @@ function openViewer(entry, kind) {
     if (!viewer) return;
     viewer = null;
     clearTimeout(timer);
+    viewerNoise?.stop();
     v.hidden = true;
     if (kind === 'video') media.pause();
     media.removeAttribute('src');
@@ -2693,7 +2698,19 @@ let lastShotSent = 0;
 function setShield(on) {
   shieldOn = on;
   $('shield').hidden = !on || $('chat').hidden;
+  if (on) {
+    // nothing stays open behind the shield: held or revealed messages, the viewer
+    for (const m of document.querySelectorAll('.peek, .reveal')) m.classList.remove('peek', 'reveal');
+    viewer?.close();
+  }
   if (!on) checkReads();
+}
+// A capture key is on its way (the Windows key starts most of them): cover the
+// page at once without telling the other side, it may be nothing.
+function shieldBriefly() {
+  setShield(true);
+  clearTimeout(shieldKeyTimer);
+  shieldKeyTimer = setTimeout(evaluateShield, 2500);
 }
 function evaluateShield() {
   setShield(document.hidden || !document.hasFocus());
@@ -3834,6 +3851,234 @@ function bindVeil() {
   applyVeil();
 }
 
+// ---------- anti-capture: noise rendering ----------
+// A screenshot, or a screen recording at a lower rate than the screen, grabs
+// single frames. While a message is held open its text is drawn on a canvas
+// that swaps two frames on every screen refresh. Frame A is a random field r;
+// frame B keeps r on the letters and flips it everywhere else. Each frame on
+// its own is uniform noise and holds nothing; the eye fuses them, the flipping
+// background turns smooth grey and the letters stay as a still grain. r is
+// redrawn a few times a second, so two screenshots taken apart don't combine.
+let noiseOn = (() => { try { return localStorage.getItem('najva:noise') !== '0'; } catch { return true; } })();
+const NOISE_SEL = '.body, .quote-text, .ig-title, .music-title, .file-card .name, .edit-prev-text';
+const NOISE_REGEN_MS = 300;
+const RTL_RE = /[֐-ࣿיִ-﷿ﹰ-﻿]/;
+const noiseViews = new Map(); // element -> view
+let noiseRaf = 0;
+let noiseIdle = 0;
+let noiseFlip = false;
+let viewerNoise = null; // the photo/video viewer's noise, driven by the same loop
+
+function applyNoise() {
+  document.body.classList.toggle('noisy', noiseOn);
+  $('noise-switch').classList.toggle('on', noiseOn);
+  if (!noiseOn) for (const v of [...noiseViews.values()]) dropNoise(v);
+}
+
+function noiseTargets() {
+  if (!noiseOn || !veilOn || !canSee()) return [];
+  const states = matchMedia('(hover: hover)').matches ? '.peek, .reveal, :hover' : '.peek, .reveal';
+  return document.querySelectorAll(`#messages .msg:is(${states}) :is(${NOISE_SEL})`);
+}
+
+// Random bits, from the CSPRNG (it refuses more than 64 KiB per call).
+function randomBits(n) {
+  const bytes = new Uint8Array(Math.ceil(n / 8));
+  for (let i = 0; i < bytes.length; i += 65536) crypto.getRandomValues(bytes.subarray(i, i + 65536));
+  return bytes;
+}
+
+// Where the letters are: each word is drawn on a canvas at the exact spot the
+// browser laid it out (same font), emoji pictures likewise; alpha is the mask.
+function textMask(elm, w, h, dpr) {
+  const box = elm.getBoundingClientRect();
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.scale(dpr, dpr);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#000';
+  const range = document.createRange();
+  const walker = document.createTreeWalker(elm, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const cs = getComputedStyle(node.parentElement);
+    ctx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+    for (const m of node.data.matchAll(/\S+/g)) {
+      range.setStart(node, m.index);
+      range.setEnd(node, m.index + m[0].length);
+      const rects = range.getClientRects();
+      if (!rects.length) continue;
+      // A word the layout split over two lines is drawn letter by letter.
+      const parts = rects.length === 1 ? [[m[0], rects[0]]] : [...m[0]].map((ch, i) => {
+        range.setStart(node, m.index + i);
+        range.setEnd(node, m.index + i + ch.length);
+        return [ch, range.getBoundingClientRect()];
+      });
+      for (const [word, r] of parts) {
+        ctx.direction = RTL_RE.test(word) ? 'rtl' : 'ltr';
+        ctx.fillText(word, r.left - box.left + r.width / 2, r.top - box.top + r.height / 2);
+      }
+    }
+  }
+  for (const img of elm.querySelectorAll('img.emo')) {
+    if (!img.complete || !img.naturalWidth) continue;
+    const r = img.getBoundingClientRect();
+    ctx.drawImage(img, r.left - box.left, r.top - box.top, r.width, r.height);
+  }
+  const px = ctx.getImageData(0, 0, w, h).data;
+  const mask = new Uint8Array(w * h);
+  for (let i = 0; i < mask.length; i++) mask[i] = px[i * 4 + 3] > 96 ? 1 : 0;
+  return mask;
+}
+
+function rgbOf(color) {
+  const m = color.match(/\d+(\.\d+)?/g) || [];
+  return [+m[0] || 0, +m[1] || 0, +m[2] || 0];
+}
+
+function makeNoise(elm) {
+  const box = elm.getBoundingClientRect();
+  if (box.width < 2 || box.height < 2) return null;
+  const dpr = Math.min(devicePixelRatio || 1, 3);
+  const w = Math.ceil(box.width * dpr);
+  const h = Math.ceil(box.height * dpr);
+  const layer = el('span', 'noise-layer');
+  const a = document.createElement('canvas');
+  const b = document.createElement('canvas');
+  a.width = b.width = w;
+  a.height = b.height = h;
+  layer.append(a, b);
+  elm.append(layer);
+  const [r, g, bl] = rgbOf(getComputedStyle(elm).color);
+  const v = { elm, layer, a, b, w, h, bw: box.width, bh: box.height, mask: textMask(elm, w, h, dpr), ink: ((255 << 24) | (bl << 16) | (g << 8) | r) >>> 0, at: 0 };
+  paintNoise(v);
+  return v;
+}
+
+function paintNoise(v) {
+  const n = v.w * v.h;
+  const bits = randomBits(n);
+  const fa = new ImageData(v.w, v.h);
+  const fb = new ImageData(v.w, v.h);
+  const pa = new Uint32Array(fa.data.buffer);
+  const pb = new Uint32Array(fb.data.buffer);
+  const { mask, ink } = v;
+  for (let i = 0; i < n; i++) {
+    const bit = (bits[i >> 3] >> (i & 7)) & 1;
+    if (bit) pa[i] = ink;
+    if (bit ^ mask[i] ^ 1) pb[i] = ink; // letters keep r, the rest flips
+  }
+  v.a.getContext('2d').putImageData(fa, 0, 0);
+  v.b.getContext('2d').putImageData(fb, 0, 0);
+  v.at = performance.now();
+}
+
+function dropNoise(v) {
+  v.layer.remove();
+  noiseViews.delete(v.elm);
+}
+
+function noiseLoop(now) {
+  noiseRaf = 0;
+  const want = new Set(noiseTargets());
+  for (const v of [...noiseViews.values()]) {
+    const box = v.elm.getBoundingClientRect();
+    if (!want.has(v.elm) || !v.elm.isConnected || Math.abs(box.width - v.bw) > 1 || Math.abs(box.height - v.bh) > 1) dropNoise(v);
+  }
+  for (const elm of want) if (!noiseViews.has(elm)) { const v = makeNoise(elm); if (v) noiseViews.set(elm, v); }
+  noiseFlip = !noiseFlip;
+  for (const v of noiseViews.values()) {
+    if (!noiseFlip && now - v.at > NOISE_REGEN_MS) paintNoise(v); // a new r only between pairs
+    v.layer.classList.toggle('flip', noiseFlip);
+  }
+  if (viewerNoise) viewerNoise.tick(now, noiseFlip);
+  noiseIdle = noiseViews.size || viewerNoise ? 0 : noiseIdle + 1;
+  if (noiseIdle < 30) noiseRaf = requestAnimationFrame(noiseLoop);
+}
+function kickNoise() {
+  if (noiseOn && !noiseRaf) { noiseIdle = 0; noiseRaf = requestAnimationFrame(noiseLoop); }
+}
+
+// Photos and videos in the viewer. A picture's shades can't be hidden from a
+// single frame the way two-tone letters can, so here each frame is the picture
+// (at reduced contrast) plus strong random noise, and the next frame minus the
+// same noise: the eye averages the noise away, a screenshot keeps all of it.
+const MEDIA_NOISE = 80;
+function startViewerNoise(media, host) {
+  const cv = [document.createElement('canvas'), document.createElement('canvas')];
+  const layer = el('div', 'noise-media');
+  layer.append(...cv);
+  host.prepend(layer);
+  const work = document.createElement('canvas');
+  const wctx = work.getContext('2d', { willReadFrequently: true });
+  let w = 0;
+  let h = 0;
+  let at = 0;
+  let frameTime = -1;
+  const size = () => {
+    const iw = media.naturalWidth || media.videoWidth;
+    const ih = media.naturalHeight || media.videoHeight;
+    if (!iw || !ih) return false;
+    const s = Math.min(innerWidth / iw, innerHeight / ih);
+    const cw = iw * s;
+    const ch = ih * s;
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    const budget = media.videoWidth ? 450000 : 1200000; // pixels per frame
+    const k = Math.min(1, Math.sqrt(budget / (cw * ch * dpr * dpr)));
+    w = Math.max(1, Math.round(cw * dpr * k));
+    h = Math.max(1, Math.round(ch * dpr * k));
+    work.width = cv[0].width = cv[1].width = w;
+    work.height = cv[0].height = cv[1].height = h;
+    layer.style.width = `${cw}px`;
+    layer.style.height = `${ch}px`;
+    return true;
+  };
+  const paint = () => {
+    wctx.drawImage(media, 0, 0, w, h);
+    const src = wctx.getImageData(0, 0, w, h).data;
+    const n = w * h;
+    const bits = randomBits(n);
+    const fa = new ImageData(w, h);
+    const fb = new ImageData(w, h);
+    const da = fa.data;
+    const db = fb.data;
+    const span = (255 - 2 * MEDIA_NOISE) / 255;
+    for (let i = 0, p = 0; i < n; i++, p += 4) {
+      const s = (bits[i >> 3] >> (i & 7)) & 1 ? MEDIA_NOISE : -MEDIA_NOISE;
+      for (let c = 0; c < 3; c++) {
+        const base = MEDIA_NOISE + src[p + c] * span;
+        da[p + c] = base + s;
+        db[p + c] = base - s;
+      }
+      da[p + 3] = db[p + 3] = 255;
+    }
+    cv[0].getContext('2d').putImageData(fa, 0, 0);
+    cv[1].getContext('2d').putImageData(fb, 0, 0);
+    at = performance.now();
+  };
+  viewerNoise = {
+    tick(now, flip) {
+      if (!w && !size()) return;
+      // a new pair when the video moves on, or a fresh noise field for a still
+      const t = media.currentTime ?? 0;
+      if (!flip && (now - at > NOISE_REGEN_MS || (media.videoWidth && t !== frameTime))) { frameTime = t; paint(); }
+      layer.classList.toggle('flip', flip);
+    },
+    stop() { viewerNoise = null; layer.remove(); },
+  };
+  kickNoise();
+}
+
+function bindNoise() {
+  const list = $('messages');
+  list.addEventListener('pointerdown', kickNoise);
+  list.addEventListener('pointerover', kickNoise);
+  list.addEventListener('click', kickNoise);
+  applyNoise();
+}
+
 // ---------- gif picker ----------
 const GIF_TOPICS = [['❤️ عاشقانه', 'love'], ['😂 خنده', 'laugh'], ['😘 بوس', 'kiss'], ['🤗 بغل', 'hug'], ['😢 ناراحت', 'sad'], ['😍 دلتنگ', 'miss you'], ['👋 سلام', 'hello'], ['🙏 ممنون', 'thank you'], ['🎂 تولد', 'happy birthday'], ['😴 شب بخیر', 'good night']];
 let gifSeq = 0;
@@ -4735,7 +4980,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-16.11';
+const APP_VERSION = '2026-10-16.12';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.
@@ -5881,6 +6126,7 @@ function bindUi() {
   bindManager();
   bindRail();
   bindVeil();
+  bindNoise();
   $('messages').addEventListener('scroll', () => { if ($('messages').scrollTop < 60) loadHistory(false); updateToBottom(); }, { passive: true });
   $('to-bottom').onclick = () => {
     const list = $('messages');
@@ -6010,6 +6256,13 @@ function bindUi() {
       applyVeil();
       toast(veilOn ? 'متن محرمانه روشن شد: برای خواندن، روی پیام نگه دارید' : 'متن محرمانه خاموش شد');
     }
+    if (act === 'noise') {
+      e.stopPropagation();
+      noiseOn = !noiseOn;
+      try { localStorage.setItem('najva:noise', noiseOn ? '1' : '0'); } catch {}
+      applyNoise();
+      toast(noiseOn ? 'ضد اسکرین‌شات روشن شد: پیام نگه‌داشته‌شده و عکس‌ها نویزی نمایش داده می‌شوند و اسکرین‌شات فقط نویز می‌گیرد' : 'ضد اسکرین‌شات خاموش شد');
+    }
   };
 
   // Privacy: hide content when the window loses focus, flag screenshot keys.
@@ -6032,11 +6285,24 @@ function bindUi() {
   window.addEventListener('pagehide', lockSoon);
   window.addEventListener('blur', evaluateShield);
   window.addEventListener('focus', () => { evaluateShield(); if (!locked) { unread = 0; updateTitle(); } });
+  const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'PrintScreen' || (e.metaKey && e.shiftKey) || (e.key === 'Meta' && e.shiftKey) || (e.key === 'Shift' && e.metaKey)) screenshotAttempt();
+    const k = e.key;
+    const mod = e.ctrlKey || e.metaKey;
+    // Win+Shift+S, Win+PrtSc, Cmd+Shift+3/4/5, Cmd+Ctrl+Shift+4, Win+Alt+R (Game Bar recording), Win+G
+    if (k === 'PrintScreen' || (e.metaKey && e.shiftKey) || (k === 'Meta' && e.shiftKey) || (k === 'Shift' && e.metaKey) ||
+        (e.metaKey && e.altKey && /^[rR®]$/.test(k)) || (e.metaKey && /^[gG]$/.test(k))) { screenshotAttempt(); return; }
+    // Printing is a capture too; developer tools can read the page.
+    if ((mod && /^[pP]$/.test(k)) || k === 'F12' || (mod && e.shiftKey && /^[iIjJcC]$/.test(k)) || (e.metaKey && e.altKey && /^[iIjJcC]$/.test(k))) {
+      e.preventDefault();
+      screenshotAttempt();
+      return;
+    }
+    if (k === 'Meta' && !isMac) shieldBriefly();
   });
   window.addEventListener('keyup', (e) => { if (e.key === 'PrintScreen') screenshotAttempt(); });
-  document.addEventListener('contextmenu', (e) => { if (e.target.closest('#viewer, .media-wrap, .ig-card')) e.preventDefault(); });
+  window.addEventListener('beforeprint', screenshotAttempt);
+  document.addEventListener('contextmenu', (e) => { if (e.target.closest('#chat, #viewer')) e.preventDefault(); });
   document.addEventListener('dragstart', (e) => { if (e.target.closest?.('#chat, #viewer')) e.preventDefault(); });
 
   window.addEventListener('beforeunload', (e) => {

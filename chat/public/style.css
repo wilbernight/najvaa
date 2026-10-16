@@ -484,7 +484,8 @@ body { touch-action: manipulation; }
 /* sized to the screen itself: a % height inside the grid has nothing to measure against */
 .viewer img, .viewer video { max-width: 100vw; max-height: 100vh; max-height: 100dvh; object-fit: contain; pointer-events: none; }
 .viewer .hint { position: absolute; bottom: max(20px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); color: rgba(255,255,255,.7); font-size: 12px; background: rgba(255,255,255,.08); padding: 5px 12px; border-radius: 99px; }
-.shield { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 70%, transparent); backdrop-filter: blur(40px) saturate(.6); -webkit-backdrop-filter: blur(40px) saturate(.6); }
+/* fully opaque: a capture taken behind it gets nothing at all */
+.shield { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: var(--bg); }
 .shield div { display: flex; flex-direction: column; align-items: center; gap: 6px; color: var(--text-2); text-align: center; }
 .shield .i { width: 40px; height: 40px; color: var(--brand-1); margin-bottom: 6px; }
 .shield span { font-size: 13px; color: var(--text-3); }
@@ -1036,3 +1037,22 @@ body.veil .ig-reply-prev { -webkit-text-fill-color: transparent; background-imag
 body.veil #ig-modal.peek .ig-reply-prev { -webkit-text-fill-color: unset; background-image: none; animation: none; }
 #igm-text.editing { border-color: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,.18); }
 
+/* ---------- anti-capture: noise rendering ----------
+   While a message is held, its letters are drawn by app.js on two canvases that
+   swap every screen refresh (each one alone is noise); the real text stays
+   unpainted underneath, keeping the layout. */
+body.veil.noisy .msg:is(.peek, .reveal) :is(.body, .quote-text, .ig-title, .music-title, .file-card .name, .edit-prev-text) { -webkit-text-fill-color: transparent; background-image: none; animation: none; position: relative; }
+body.veil.noisy .msg:is(.peek, .reveal) :is(.body, .ig-title) img.emo { object-position: -9999px -9999px; background: none; animation: none; }
+@media (hover: hover) {
+  body.veil.noisy .msg:hover :is(.body, .quote-text, .ig-title, .music-title, .file-card .name, .edit-prev-text) { -webkit-text-fill-color: transparent; background-image: none; animation: none; position: relative; }
+  body.veil.noisy .msg:hover :is(.body, .ig-title) img.emo { object-position: -9999px -9999px; background: none; animation: none; }
+}
+.noise-layer { position: absolute; inset: 0; pointer-events: none; }
+.noise-layer canvas, .noise-media canvas { position: absolute; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; }
+.noise-layer canvas + canvas, .noise-media canvas + canvas { visibility: hidden; }
+.noise-layer.flip canvas, .noise-media.flip canvas { visibility: hidden; }
+.noise-layer.flip canvas + canvas, .noise-media.flip canvas + canvas { visibility: visible; }
+.noise-media { position: relative; pointer-events: none; }
+/* the real photo/video only feeds the canvases; it is never painted visibly */
+.viewer .noise-src { position: absolute; width: 2px; height: 2px; opacity: .01; left: 0; top: 0; }
+@media print { body { display: none !important; } }
