@@ -243,6 +243,7 @@ async function openRoom(code, pass, creating) {
   connect();
   histBefore = null;
   histMore = false;
+  dueAfter = creating ? 0 : null; // set once the first history page is in
   if (!creating) loadHistory(true); // a brand-new room has no history yet
 }
 
@@ -3242,6 +3243,10 @@ const pendingReacts = new Map(); // target id -> reactions that arrived before i
 let histBefore = null;
 let histMore = false;
 let histLoading = false;
+// Newest log timestamp read so far; the due check asks only for what is newer.
+// Null until the first history page is in, so older entries the first page left
+// out are never taken for newly due messages and appended under the newest.
+let dueAfter = null;
 let insertAnchor = null; // set while older history is inserted above the chat
 
 // The relay refuses a room whose stored history was registered with a different
@@ -3481,6 +3486,7 @@ async function loadHistory(initial, limit = 120) {
     const { items, more } = await r.json();
     histMore = !!more;
     if (items.length) histBefore = items[items.length - 1].ts;
+    if (initial) dueAfter = Math.max(dueAfter || 0, items.length ? items[0].ts : 0);
     const events = (await mapLimit(items, 24, openEvent)).filter(Boolean);
     events.reverse(); // oldest first
     const prevHeight = list.scrollHeight;
@@ -4057,12 +4063,15 @@ async function scheduleNow() {
 // show what is new (a reconnect does the same, for ones missed while offline).
 let dueRunning = false;
 async function fetchDue() {
-  if (dueRunning || !room?.histKey || $('chat').hidden) return;
+  if (dueRunning || dueAfter === null || !room?.histKey || $('chat').hidden) return;
   dueRunning = true;
   try {
-    const data = await fetchLogPage(null, Date.now() - 6 * 3600000);
+    const after = dueAfter;
+    const data = await fetchLogPage(null, after);
     if (!data) return;
-    const evs = (await mapLimit(data.items, 24, openEvent))
+    const items = data.items.filter((it) => it.ts > after); // an older relay ignores `after`
+    if (items.length) dueAfter = Math.max(dueAfter, items[0].ts);
+    const evs = (await mapLimit(items, 24, openEvent))
       .filter((ev) => ev && ev.k === 'text' && !messages.has(ev.id) && !seen.has(ev.id))
       .sort((a, b) => a.ts - b.ts);
     for (const ev of evs) {
@@ -4986,7 +4995,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-16.17';
+const APP_VERSION = '2026-10-17.1';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.
