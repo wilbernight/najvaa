@@ -653,13 +653,20 @@ body.multi .msg.in .sender { display: block; }
 .sas-row + .sas-row { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .sas-name { font-family: "Vazirmatn", system-ui, sans-serif; font-size: 12.5px; font-weight: 600; color: var(--text-2); letter-spacing: 0; word-spacing: 0; margin-bottom: 4px; }
 
-/* confidential text (anti-zoom) */
-body.veil .msg .body, body.veil .msg .ig-title, body.veil .msg .music-title, body.veil .msg .file-card .name, body.veil .act .snip, body.veil .mg-title { filter: blur(6px); transition: filter .12s; }
-body.veil .msg.peek .body, body.veil .msg.peek .ig-title, body.veil .msg.peek .music-title, body.veil .msg.peek .file-card .name, body.veil .act.peek .snip { filter: none; }
+/* confidential text (anti-zoom): a Telegram-style spoiler. Text keeps its
+   layout but its glyphs are not painted, and pictures are pushed out of their
+   own box (object-position), so nothing readable is drawn; the box shows only
+   drifting dots until it is held or hovered. */
+:root { --spoil: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40' fill='%23a3a9b3'%3E%3Ccircle cx='13.0' cy='6.0' r='1' fill-opacity='0.35'/%3E%3Ccircle cx='2.9' cy='21.4' r='0.7' fill-opacity='0.95'/%3E%3Ccircle cx='2.3' cy='20.3' r='0.5' fill-opacity='0.35'/%3E%3Ccircle cx='17.3' cy='2.8' r='0.5' fill-opacity='0.95'/%3E%3Ccircle cx='17.0' cy='33.1' r='0.5' fill-opacity='0.5'/%3E%3Ccircle cx='25.2' cy='23.3' r='0.5' fill-opacity='0.95'/%3E%3Ccircle cx='23.4' cy='2.0' r='0.6' fill-opacity='0.35'/%3E%3Ccircle cx='22.3' cy='5.3' r='0.8' fill-opacity='0.5'/%3E%3Ccircle cx='21.6' cy='22.8' r='0.9' fill-opacity='0.5'/%3E%3Ccircle cx='4.1' cy='22.8' r='0.6' fill-opacity='0.65'/%3E%3Ccircle cx='3.9' cy='28.5' r='0.9' fill-opacity='0.35'/%3E%3Ccircle cx='24.8' cy='19.9' r='0.9' fill-opacity='0.8'/%3E%3Ccircle cx='31.1' cy='18.6' r='0.8' fill-opacity='0.65'/%3E%3Ccircle cx='12.0' cy='31.8' r='1' fill-opacity='0.5'/%3E%3Ccircle cx='3.3' cy='12.0' r='0.8' fill-opacity='0.65'/%3E%3Ccircle cx='29.2' cy='11.5' r='0.5' fill-opacity='0.35'/%3E%3Ccircle cx='20.5' cy='6.6' r='0.7' fill-opacity='0.5'/%3E%3Ccircle cx='37.3' cy='16.9' r='1' fill-opacity='0.35'/%3E%3Ccircle cx='30.6' cy='22.9' r='0.7' fill-opacity='0.65'/%3E%3Ccircle cx='27.8' cy='23.8' r='0.9' fill-opacity='0.8'/%3E%3Ccircle cx='2.8' cy='3.7' r='0.7' fill-opacity='0.8'/%3E%3Ccircle cx='27.9' cy='2.6' r='1' fill-opacity='0.65'/%3E%3Ccircle cx='25.9' cy='39.7' r='0.8' fill-opacity='0.65'/%3E%3Ccircle cx='28.7' cy='35.5' r='0.7' fill-opacity='0.35'/%3E%3Ccircle cx='37.6' cy='14.2' r='0.9' fill-opacity='0.35'/%3E%3Ccircle cx='19.7' cy='8.7' r='0.7' fill-opacity='0.5'/%3E%3Ccircle cx='29.5' cy='15.9' r='0.8' fill-opacity='0.35'/%3E%3Ccircle cx='6.7' cy='16.1' r='0.7' fill-opacity='0.5'/%3E%3Ccircle cx='32.8' cy='34.6' r='0.7' fill-opacity='0.8'/%3E%3Ccircle cx='39.5' cy='27.3' r='0.8' fill-opacity='0.5'/%3E%3Ccircle cx='6.0' cy='7.0' r='0.6' fill-opacity='0.5'/%3E%3Ccircle cx='0.5' cy='33.2' r='0.6' fill-opacity='0.65'/%3E%3Ccircle cx='11.3' cy='5.8' r='0.9' fill-opacity='0.65'/%3E%3Ccircle cx='24.4' cy='12.7' r='0.6' fill-opacity='0.95'/%3E%3C/svg%3E"), url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' fill='%23a3a9b3'%3E%3Ccircle cx='30.4' cy='21.0' r='1' fill-opacity='0.35'/%3E%3Ccircle cx='14.6' cy='27.9' r='1' fill-opacity='0.95'/%3E%3Ccircle cx='12.6' cy='12.8' r='0.5' fill-opacity='0.8'/%3E%3Ccircle cx='20.3' cy='2.0' r='0.5' fill-opacity='0.5'/%3E%3Ccircle cx='14.1' cy='3.5' r='0.9' fill-opacity='0.35'/%3E%3Ccircle cx='3.3' cy='18.1' r='0.9' fill-opacity='0.35'/%3E%3Ccircle cx='30.4' cy='19.6' r='0.5' fill-opacity='0.5'/%3E%3Ccircle cx='19.7' cy='4.8' r='0.7' fill-opacity='0.65'/%3E%3Ccircle cx='19.3' cy='15.2' r='0.5' fill-opacity='0.8'/%3E%3Ccircle cx='31.8' cy='14.9' r='0.8' fill-opacity='0.65'/%3E%3Ccircle cx='2.7' cy='3.3' r='0.7' fill-opacity='0.65'/%3E%3Ccircle cx='15.3' cy='22.1' r='0.9' fill-opacity='0.35'/%3E%3Ccircle cx='6.6' cy='30.5' r='0.7' fill-opacity='0.5'/%3E%3Ccircle cx='22.1' cy='29.3' r='0.9' fill-opacity='0.65'/%3E%3Ccircle cx='31.3' cy='27.6' r='1' fill-opacity='0.65'/%3E%3Ccircle cx='16.6' cy='29.1' r='0.7' fill-opacity='0.5'/%3E%3Ccircle cx='17.0' cy='24.9' r='0.7' fill-opacity='0.5'/%3E%3Ccircle cx='19.6' cy='25.2' r='0.6' fill-opacity='0.5'/%3E%3Ccircle cx='26.2' cy='23.7' r='0.6' fill-opacity='0.5'/%3E%3Ccircle cx='16.6' cy='11.4' r='0.5' fill-opacity='0.35'/%3E%3Ccircle cx='25.3' cy='15.1' r='0.6' fill-opacity='0.95'/%3E%3Ccircle cx='30.6' cy='14.3' r='1' fill-opacity='0.65'/%3E%3Ccircle cx='30.6' cy='11.7' r='0.6' fill-opacity='0.35'/%3E%3Ccircle cx='7.3' cy='6.3' r='0.6' fill-opacity='0.8'/%3E%3Ccircle cx='20.0' cy='28.8' r='0.5' fill-opacity='0.8'/%3E%3Ccircle cx='29.1' cy='11.0' r='1' fill-opacity='0.35'/%3E%3C/svg%3E"); --spoil-size: 40px 40px, 32px 32px; }
+/* white dots on the coloured outgoing bubble */
+.msg.out:not(.gif):not(.big-emoji) { --spoil: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40' fill='%23ffffff'%3E%3Ccircle cx='13.0' cy='6.0' r='1' fill-opacity='0.35'/%3E%3Ccircle cx='2.9' cy='21.4' r='0.7' fill-opacity='0.95'/%3E%3Ccircle cx='2.3' cy='20.3' r='0.5' fill-opacity='0.35'/%3E%3Ccircle cx='17.3' cy='2.8' r='0.5' fill-opacity='0.95'/%3E%3Ccircle cx='17.0' cy='33.1' r='0.5' fill-opacity='0.5'/%3E%3Ccircle cx='25.2' cy='23.3' r='0.5' fill-opacity='0.95'/%3E%3Ccircle cx='23.4' cy='2.0' r='0.6' fill-opacity='0.35'/%3E%3Ccircle cx='22.3' cy='5.3' r='0.8' fill-opacity='0.5'/%3E%3Ccircle cx='21.6' cy='22.8' r='0.9' fill-opacity='0.5'/%3E%3Ccircle cx='4.1' cy='22.8' r='0.6' fill-opacity='0.65'/%3E%3Ccircle cx='3.9' cy='28.5' r='0.9' fill-opacity='0.35'/%3E%3Ccircle cx='24.8' cy='19.9' r='0.9' fill-opacity='0.8'/%3E%3Ccircle cx='31.1' cy='18.6' r='0.8' fill-opacity='0.65'/%3E%3Ccircle cx='12.0' cy='31.8' r='1' fill-opacity='0.5'/%3E%3Ccircle cx='3.3' cy='12.0' r='0.8' fill-opacity='0.65'/%3E%3Ccircle cx='29.2' cy='11.5' r='0.5' fill-opacity='0.35'/%3E%3Ccircle cx='20.5' cy='6.6' r='0.7' fill-opacity='0.5'/%3E%3Ccircle cx='37.3' cy='16.9' r='1' fill-opacity='0.35'/%3E%3Ccircle cx='30.6' cy='22.9' r='0.7' fill-opacity='0.65'/%3E%3Ccircle cx='27.8' cy='23.8' r='0.9' fill-opacity='0.8'/%3E%3Ccircle cx='2.8' cy='3.7' r='0.7' fill-opacity='0.8'/%3E%3Ccircle cx='27.9' cy='2.6' r='1' fill-opacity='0.65'/%3E%3Ccircle cx='25.9' cy='39.7' r='0.8' fill-opacity='0.65'/%3E%3Ccircle cx='28.7' cy='35.5' r='0.7' fill-opacity='0.35'/%3E%3Ccircle cx='37.6' cy='14.2' r='0.9' fill-opacity='0.35'/%3E%3Ccircle cx='19.7' cy='8.7' r='0.7' fill-opacity='0.5'/%3E%3Ccircle cx='29.5' cy='15.9' r='0.8' fill-opacity='0.35'/%3E%3Ccircle cx='6.7' cy='16.1' r='0.7' fill-opacity='0.5'/%3E%3Ccircle cx='32.8' cy='34.6' r='0.7' fill-opacity='0.8'/%3E%3Ccircle cx='39.5' cy='27.3' r='0.8' fill-opacity='0.5'/%3E%3Ccircle cx='6.0' cy='7.0' r='0.6' fill-opacity='0.5'/%3E%3Ccircle cx='0.5' cy='33.2' r='0.6' fill-opacity='0.65'/%3E%3Ccircle cx='11.3' cy='5.8' r='0.9' fill-opacity='0.65'/%3E%3Ccircle cx='24.4' cy='12.7' r='0.6' fill-opacity='0.95'/%3E%3C/svg%3E"), url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' fill='%23ffffff'%3E%3Ccircle cx='30.4' cy='21.0' r='1' fill-opacity='0.35'/%3E%3Ccircle cx='14.6' cy='27.9' r='1' fill-opacity='0.95'/%3E%3Ccircle cx='12.6' cy='12.8' r='0.5' fill-opacity='0.8'/%3E%3Ccircle cx='20.3' cy='2.0' r='0.5' fill-opacity='0.5'/%3E%3Ccircle cx='14.1' cy='3.5' r='0.9' fill-opacity='0.35'/%3E%3Ccircle cx='3.3' cy='18.1' r='0.9' fill-opacity='0.35'/%3E%3Ccircle cx='30.4' cy='19.6' r='0.5' fill-opacity='0.5'/%3E%3Ccircle cx='19.7' cy='4.8' r='0.7' fill-opacity='0.65'/%3E%3Ccircle cx='19.3' cy='15.2' r='0.5' fill-opacity='0.8'/%3E%3Ccircle cx='31.8' cy='14.9' r='0.8' fill-opacity='0.65'/%3E%3Ccircle cx='2.7' cy='3.3' r='0.7' fill-opacity='0.65'/%3E%3Ccircle cx='15.3' cy='22.1' r='0.9' fill-opacity='0.35'/%3E%3Ccircle cx='6.6' cy='30.5' r='0.7' fill-opacity='0.5'/%3E%3Ccircle cx='22.1' cy='29.3' r='0.9' fill-opacity='0.65'/%3E%3Ccircle cx='31.3' cy='27.6' r='1' fill-opacity='0.65'/%3E%3Ccircle cx='16.6' cy='29.1' r='0.7' fill-opacity='0.5'/%3E%3Ccircle cx='17.0' cy='24.9' r='0.7' fill-opacity='0.5'/%3E%3Ccircle cx='19.6' cy='25.2' r='0.6' fill-opacity='0.5'/%3E%3Ccircle cx='26.2' cy='23.7' r='0.6' fill-opacity='0.5'/%3E%3Ccircle cx='16.6' cy='11.4' r='0.5' fill-opacity='0.35'/%3E%3Ccircle cx='25.3' cy='15.1' r='0.6' fill-opacity='0.95'/%3E%3Ccircle cx='30.6' cy='14.3' r='1' fill-opacity='0.65'/%3E%3Ccircle cx='30.6' cy='11.7' r='0.6' fill-opacity='0.35'/%3E%3Ccircle cx='7.3' cy='6.3' r='0.6' fill-opacity='0.8'/%3E%3Ccircle cx='20.0' cy='28.8' r='0.5' fill-opacity='0.8'/%3E%3Ccircle cx='29.1' cy='11.0' r='1' fill-opacity='0.35'/%3E%3C/svg%3E"); }
+@keyframes spoil { to { background-position: 40px 40px, -32px 32px; } }
+body.veil .msg .body, body.veil .msg .ig-title, body.veil .msg .music-title, body.veil .msg .file-card .name, body.veil .act .snip, body.veil .mg-title { -webkit-text-fill-color: transparent; background-image: var(--spoil); background-size: var(--spoil-size); animation: spoil 4s linear infinite; }
+body.veil .msg.peek .body, body.veil .msg.peek .ig-title, body.veil .msg.peek .music-title, body.veil .msg.peek .file-card .name, body.veil .act.peek .snip { -webkit-text-fill-color: unset; background-image: none; animation: none; }
 @media (hover: hover) {
-  body.veil .msg:hover .body, body.veil .msg:hover .ig-title, body.veil .msg:hover .music-title, body.veil .msg:hover .file-card .name, body.veil .act:hover .snip, body.veil .mg-list li:hover .mg-title { filter: none; }
+  body.veil .msg:hover .body, body.veil .msg:hover .ig-title, body.veil .msg:hover .music-title, body.veil .msg:hover .file-card .name, body.veil .act:hover .snip, body.veil .mg-list li:hover .mg-title { -webkit-text-fill-color: unset; background-image: none; animation: none; }
 }
-body.veil #input:not(:focus) { filter: blur(4px); }
+body.veil #input:not(:focus):not(:placeholder-shown) { -webkit-text-fill-color: transparent; background-image: var(--spoil); background-size: var(--spoil-size); animation: spoil 4s linear infinite; }
 
 /* content manager */
 .manage-card { max-width: 520px; }
@@ -697,21 +704,32 @@ body.veil #input:not(:focus) { filter: blur(4px); }
 /* confidential mode: GIFs too, plus a tap-to-show button on every message */
 /* Instagram previews follow the anti-zoom too: thumbnails, stacked cards and
    the post sheet stay blurred until a finger rests on them (or the mouse hovers). */
-body.veil .msg .ig-thumb img, body.veil .msg .stack-card img { filter: blur(14px) saturate(1.2); transform: scale(1.12); transition: filter .12s, transform .12s; }
-body.veil .msg.peek .ig-thumb img, body.veil .msg.reveal .ig-thumb img, body.veil .msg.peek .stack-card img { filter: none; transform: none; }
-body.veil .igm-media img { filter: blur(18px) saturate(1.2); transform: scale(1.12); transition: filter .12s, transform .12s; }
-body.veil .igm-title, body.veil .igm-note, body.veil .igm-replies { filter: blur(6px); transition: filter .12s; }
-body.veil #ig-modal.peek .igm-media img { filter: none; transform: none; }
-body.veil #ig-modal.peek .igm-title, body.veil #ig-modal.peek .igm-note, body.veil #ig-modal.peek .igm-replies { filter: none; }
-body.veil #igm-text:not(:focus) { filter: blur(4px); }
+body.veil .msg .ig-thumb img, body.veil .msg .stack-card img { object-position: -9999px -9999px; background-color: rgba(127,127,127,.2); background-image: var(--spoil); background-size: var(--spoil-size); animation: spoil 4s linear infinite; }
+body.veil .msg.peek .ig-thumb img, body.veil .msg.reveal .ig-thumb img, body.veil .msg.peek .stack-card img { object-position: 50% 50%; background: none; animation: none; }
+body.veil .igm-media img { object-position: -9999px -9999px; background-color: rgba(127,127,127,.2); background-image: var(--spoil); background-size: var(--spoil-size); animation: spoil 4s linear infinite; }
+body.veil .igm-title, body.veil .igm-note, body.veil .igm-replies { -webkit-text-fill-color: transparent; background-image: var(--spoil); background-size: var(--spoil-size); animation: spoil 4s linear infinite; }
+body.veil #ig-modal.peek .igm-media img { object-position: 50% 50%; background: none; animation: none; }
+body.veil #ig-modal.peek .igm-title, body.veil #ig-modal.peek .igm-note, body.veil #ig-modal.peek .igm-replies { -webkit-text-fill-color: unset; background-image: none; animation: none; }
+body.veil #igm-text:not(:focus):not(:placeholder-shown) { -webkit-text-fill-color: transparent; background-image: var(--spoil); background-size: var(--spoil-size); animation: spoil 4s linear infinite; }
 @media (hover: hover) {
-  body.veil .msg:hover .ig-thumb img, body.veil .msg:hover .stack-card img, body.veil .igm-media:hover img { filter: none; transform: none; }
-  body.veil .igm-title:hover, body.veil .igm-note:hover, body.veil .igm-replies:hover { filter: none; }
+  body.veil .msg:hover .ig-thumb img, body.veil .msg:hover .stack-card img, body.veil .igm-media:hover img { object-position: 50% 50%; background: none; animation: none; }
+  body.veil .igm-title:hover, body.veil .igm-note:hover, body.veil .igm-replies:hover { -webkit-text-fill-color: unset; background-image: none; animation: none; }
 }
-body.veil .msg .gif-mini { filter: blur(8px); transition: filter .12s; }
-body.veil .msg.peek .gif-mini, body.veil .msg.reveal .gif-mini { filter: none; }
-body.veil .msg.reveal .body, body.veil .msg.reveal .ig-title, body.veil .msg.reveal .music-title, body.veil .msg.reveal .file-card .name { filter: none; }
-@media (hover: hover) { body.veil .msg:hover .gif-mini { filter: none; } }
+/* GIFs and emoji get the spoiler on the picture itself */
+body.veil .msg .gif-mini, body.veil .msg .body img.emo, body.veil .act .snip img.emo, body.veil .msg .ig-title img.emo, body.veil .mg-title img.emo {
+  object-position: -9999px -9999px;
+  border-radius: 8px;
+  background-color: rgba(127,127,127,.2);
+  background-image: var(--spoil);
+  background-size: var(--spoil-size);
+  animation: spoil 4s linear infinite;
+}
+body.veil .msg .gif-mini { border-radius: 12px; }
+body.veil .msg.peek .gif-mini, body.veil .msg.reveal .gif-mini,
+body.veil .msg.peek .body img.emo, body.veil .msg.reveal .body img.emo, body.veil .act.peek .snip img.emo,
+body.veil .msg.peek .ig-title img.emo, body.veil .msg.reveal .ig-title img.emo { object-position: 50% 50%; background: none; animation: none; }
+body.veil .msg.reveal .body, body.veil .msg.reveal .ig-title, body.veil .msg.reveal .music-title, body.veil .msg.reveal .file-card .name { -webkit-text-fill-color: unset; background-image: none; animation: none; }
+@media (hover: hover) { body.veil .msg:hover .gif-mini, body.veil .msg:hover .body img.emo, body.veil .act:hover .snip img.emo, body.veil .msg:hover .ig-title img.emo, body.veil .mg-list li:hover .mg-title img.emo { object-position: 50% 50%; background: none; animation: none; } }
 .peek-btn { display: none; width: 26px; height: 22px; border-radius: 8px; place-items: center; color: inherit; opacity: .85; margin-inline-end: 2px; }
 .peek-btn .i { width: 15px; height: 15px; }
 body.veil .peek-btn { display: inline-grid; }
@@ -743,8 +761,9 @@ body.veil .peek-btn { display: inline-grid; }
 .msg.in .voice-wave i.on { background: var(--brand-1); }
 .voice-time { font-size: 11.5px; opacity: .8; font-variant-numeric: tabular-nums; min-width: 34px; text-align: end; }
 .msg.voice .quote { margin-bottom: 8px; }
-body.veil .msg.voice .voice-wave { filter: blur(2px); }
-body.veil .msg.voice.peek .voice-wave, body.veil .msg.voice.reveal .voice-wave { filter: none; }
+body.veil .msg.voice .voice-wave { background-image: var(--spoil); background-size: var(--spoil-size); animation: spoil 4s linear infinite; border-radius: 6px; }
+body.veil .msg.voice:not(.peek):not(.reveal) .voice-wave i { visibility: hidden; }
+body.veil .msg.voice.peek .voice-wave, body.veil .msg.voice.reveal .voice-wave { background-image: none; animation: none; }
 .rec-bar { flex: 1; display: flex; align-items: center; gap: 8px; min-height: 46px; padding: 4px 12px 4px 4px; background: var(--surface); border: 1px solid var(--line-2); border-radius: 24px; animation: rise .2s var(--ease); min-width: 0; }
 .rec-bar.cancelling { border-color: var(--bad); }
 .rec-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); flex: none; animation: blink 1s infinite; }
@@ -783,9 +802,9 @@ body.veil .msg.voice.peek .voice-wave, body.veil .msg.voice.reveal .voice-wave {
 .swipe-ic .i { width: 17px; height: 17px; transform: scaleX(-1); }
 .msg.swipe-armed .swipe-ic { background: var(--brand-1); color: #fff; border-color: transparent; }
 .msg.swipe-back .swipe-ic { opacity: 0; transition: opacity .18s; }
-body.veil .msg .quote-text { filter: blur(5px); transition: filter .12s; }
-body.veil .msg.peek .quote-text, body.veil .msg.reveal .quote-text { filter: none; }
-@media (hover: hover) { body.veil .msg:hover .quote-text { filter: none; } }
+body.veil .msg .quote-text { -webkit-text-fill-color: transparent; background-image: var(--spoil); background-size: var(--spoil-size); animation: spoil 4s linear infinite; }
+body.veil .msg.peek .quote-text, body.veil .msg.reveal .quote-text { -webkit-text-fill-color: unset; background-image: none; animation: none; }
+@media (hover: hover) { body.veil .msg:hover .quote-text { -webkit-text-fill-color: unset; background-image: none; animation: none; } }
 
 /* jump to the latest message */
 .to-bottom { position: absolute; inset-inline-end: 14px; bottom: 12px; z-index: 5; width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; background: var(--surface); color: var(--text-2); border: 1px solid var(--line-2); box-shadow: var(--shadow-lg); animation: rise .18s var(--ease); cursor: pointer; }
@@ -866,8 +885,8 @@ body.veil .msg.peek .quote-text, body.veil .msg.reveal .quote-text { filter: non
   .row-time { flex: none; font-size: 12px; color: var(--text-3); }
   .row-snip { font-size: 13px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .row-snip.status { color: var(--text-3); }
-  body.veil .row-snip:not(.status) { filter: blur(5px); transition: filter .12s; }
-  body.veil .chat-row:hover .row-snip { filter: none; }
+  body.veil .row-snip:not(.status) { -webkit-text-fill-color: transparent; background-image: var(--spoil); background-size: var(--spoil-size); animation: spoil 4s linear infinite; }
+  body.veil .chat-row:hover .row-snip { -webkit-text-fill-color: unset; background-image: none; animation: none; }
   .row-badge { flex: none; }
   .rail-room { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 2px 0; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); flex: none; }
   .rail-room-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); }
@@ -967,9 +986,9 @@ img.emo { display: inline-block; width: 1.3em; height: 1.3em; vertical-align: -0
 .edit-prev-text + .edit-prev-text { margin-top: 3px; padding-top: 3px; border-top: 1px dashed color-mix(in srgb, currentColor 35%, transparent); }
 .msg.big-emoji .edit-prev { color: var(--text-2); background: var(--surface-2); }
 .meta .edited { font-weight: 600; direction: rtl; }
-body.veil .msg .edit-prev-text { filter: blur(5px); transition: filter .12s; }
-body.veil .msg.peek .edit-prev-text, body.veil .msg.reveal .edit-prev-text { filter: none; }
-@media (hover: hover) { body.veil .msg:hover .edit-prev-text { filter: none; } }
+body.veil .msg .edit-prev-text { -webkit-text-fill-color: transparent; background-image: var(--spoil); background-size: var(--spoil-size); animation: spoil 4s linear infinite; }
+body.veil .msg.peek .edit-prev-text, body.veil .msg.reveal .edit-prev-text { -webkit-text-fill-color: unset; background-image: none; animation: none; }
+@media (hover: hover) { body.veil .msg:hover .edit-prev-text { -webkit-text-fill-color: unset; background-image: none; animation: none; } }
 .react-bar .edit-btn { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; color: var(--text-2); flex: none; }
 .react-bar .edit-btn:hover { color: var(--brand-1); }
 .react-bar .edit-btn .i { width: 19px; height: 19px; }
@@ -994,7 +1013,7 @@ body.veil .msg.peek .edit-prev-text, body.veil .msg.reveal .edit-prev-text { fil
 .cap-strip:hover img, .cap-strip:hover video { filter: none; }
 .cap-input { width: 100%; resize: none; border: 1px solid transparent; outline: none; border-radius: 12px; padding: 10px 12px; background: var(--surface-2); font: inherit; font-size: 15px; line-height: 1.6; }
 .cap-input:focus { border-color: var(--brand-1); }
-body.veil .cap-input:not(:focus) { filter: blur(4px); }
+body.veil .cap-input:not(:focus):not(:placeholder-shown) { -webkit-text-fill-color: transparent; background-image: var(--spoil); background-size: var(--spoil-size); animation: spoil 4s linear infinite; }
 
 /* earlier photos of an edited photo: blurred thumbnails, hold to look */
 .edit-prev-row { display: flex; gap: 8px; align-items: center; }
@@ -1012,7 +1031,7 @@ body.veil .cap-input:not(:focus) { filter: blur(4px); }
 .ig-reply-prev { flex-basis: 100%; margin-top: 2px; padding-inline-start: 8px; border-inline-start: 2px solid currentColor; font-size: 12px; color: #b86e00; }
 @media (prefers-color-scheme: dark) { .ig-reply-prev { color: #f5b545; } }
 .msg.out .ig-reply-prev { color: #ffd88a; }
-body.veil .ig-reply-prev { filter: blur(5px); }
-body.veil #ig-modal.peek .ig-reply-prev { filter: none; }
+body.veil .ig-reply-prev { -webkit-text-fill-color: transparent; background-image: var(--spoil); background-size: var(--spoil-size); animation: spoil 4s linear infinite; }
+body.veil #ig-modal.peek .ig-reply-prev { -webkit-text-fill-color: unset; background-image: none; animation: none; }
 #igm-text.editing { border-color: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,.18); }
 
