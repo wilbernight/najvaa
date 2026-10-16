@@ -598,6 +598,7 @@ async function handleStore(req, res) {
     if (isLog) {
       entry = JSON.parse((await readBodyBuf(req, MAX_ENTRY)).toString('utf8'));
       if (!EID_RE.test(entry.id) || typeof entry.iv !== 'string' || typeof entry.ct !== 'string' || entry.iv.length > 32) return json(res, 400, {});
+      if (entry.at !== undefined && entry.at !== 0 && !(Number.isInteger(entry.at) && entry.at > Date.now() && entry.at <= Date.now() + MAX_SCHEDULE_MS)) return json(res, 400, {});
     } else if (isBlob) {
       chunk = await readBodyBuf(req, MAX_CHUNK);
       if (!chunk.length) return json(res, 400, {});
@@ -617,11 +618,15 @@ async function handleStore(req, res) {
     if (entry) {
       const existing = (await listEntries(dir)).find((e) => e.id === entry.id);
       if (existing) return json(res, 200, { ts: existing.ts });
-      const e = { ts: Date.now(), id: entry.id, exp: Number.isInteger(entry.exp) && entry.exp > 0 ? entry.exp : 0, blob: !!entry.blob };
+      // A scheduled entry is filed under its delivery time and stays out of
+      // every listing until then (see GET below and the due timer).
+      const at = entry.at > 0 ? entry.at : 0;
+      const e = { ts: at || Date.now(), id: entry.id, exp: Number.isInteger(entry.exp) && entry.exp > 0 ? entry.exp : 0, blob: !!entry.blob };
       const data = JSON.stringify({ iv: entry.iv, ct: entry.ct });
       await writeAtomic(path.join(dir, 'log', entryName(e)), data);
       storeTotal += data.length;
       if (storeTotal > CAP_BYTES) setImmediate(janitor);
+      if (at) dueQueue.push({ room: path.basename(dir), at });
       return json(res, 200, { ts: e.ts });
     }
     // GET /h/log?before=&limit=
@@ -630,7 +635,7 @@ async function handleStore(req, res) {
       const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 100));
       const after = Number(url.searchParams.get('after')) || 0;
       const now = Date.now();
-      const list = (await listEntries(dir)).filter((e) => e.ts < before && e.ts > after && !(e.exp && e.exp <= now)).sort((a, b) => b.ts - a.ts);
+      const list = (await listEntries(dir)).filter((e) => e.ts < before && e.ts > after && e.ts <= now && !(e.exp && e.exp <= now)).sort((a, b) => b.ts - a.ts);
       // Read the page's files a few dozen at a time rather than one by one:
       // on a deep page that was most of the response time.
       const page = list.slice(0, limit);
@@ -705,6 +710,32 @@ async function handleStore(req, res) {
     return json(res, 400, {});
   }
 }
+
+// ---------- scheduled messages ----------
+// A device may store a message now with a later delivery time. Until then the
+// relay leaves it out of /h/log; when the time comes it tells every open app in
+// the room ({t:'due'}) to read the log again. Pending times are rebuilt from
+// the file names after a restart, so nothing is lost if the relay restarts.
+const MAX_SCHEDULE_MS = 400 * 86400000;
+const dueQueue = []; // {room, at}
+async function loadDueQueue() {
+  const now = Date.now();
+  for (const room of await fsp.readdir(ROOMS_DIR).catch(() => [])) {
+    if (!ROOM_RE.test(room)) continue;
+    for (const e of await listEntries(path.join(ROOMS_DIR, room))) if (e.ts > now) dueQueue.push({ room, at: e.ts });
+  }
+}
+loadDueQueue().catch(() => {});
+setInterval(() => {
+  const now = Date.now();
+  const ring = new Set();
+  for (let i = dueQueue.length - 1; i >= 0; i--) {
+    if (dueQueue[i].at > now) continue;
+    ring.add(dueQueue[i].room);
+    dueQueue.splice(i, 1);
+  }
+  for (const room of ring) for (const ws of rooms.get(room) || []) send(ws, { t: 'due' });
+}, 3000);
 
 // Deletes expired and too-old entries, orphaned uploads, and the oldest
 // entries overall while the store is above its cap.

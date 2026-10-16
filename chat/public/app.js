@@ -294,9 +294,13 @@ async function onWire(msg) {
     case 'ver':
       if (typeof msg.v === 'string') newVersion(msg.v);
       break;
+    case 'due':
+      fetchDue();
+      break;
     case 'welcome':
       if (typeof msg.ver === 'string' && msg.ver) newVersion(msg.ver); // the relay knows the published version
       else checkUpdate();
+      setTimeout(fetchDue, 2500); // scheduled messages that came due while offline
       iceServers = Array.isArray(msg.ice) ? msg.ice : [];
       applyFeatures(msg.features);
       room.creating = false;
@@ -3261,7 +3265,7 @@ async function storeEvent(ev, opts = {}) {
   const iv = rand(12);
   const ad = te.encode(`wn1/hist/${room.id}/${ev.id}`);
   const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv, additionalData: ad }, room.histKey, pad(te.encode(JSON.stringify(ev)))));
-  const body = JSON.stringify({ id: ev.id, iv: b64u(iv), ct: b64u(ct), blob: opts.blob ? 1 : 0, exp: opts.exp || 0 });
+  const body = JSON.stringify({ id: ev.id, iv: b64u(iv), ct: b64u(ct), blob: opts.blob ? 1 : 0, exp: opts.exp || 0, ...(opts.at ? { at: opts.at } : {}) });
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
       const r = await storeFetch('/h/log', { method: 'POST', body });
@@ -3832,6 +3836,253 @@ function bindVeil() {
   window.addEventListener('pointercancel', unpeek);
   window.addEventListener('blur', unpeek);
   applyVeil();
+}
+
+// ---------- scheduled messages (hidden) ----------
+// Five quick taps on the contact's name open it; nothing else in the app
+// mentions it. A scheduled message is encrypted now and stored on the relay
+// with its delivery time: the relay keeps it out of every listing until then
+// and tells the open apps when it is due, so it goes out even with this device
+// off. The pending list lives only on this device, encrypted under the room's
+// history key. Dates are entered and shown in the Persian (Jalali) calendar.
+const JALALI_MONTHS = ['فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور', 'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند'];
+const faNum = (n, width = 0) => String(n).padStart(width, '0').replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d]);
+
+function toJalali(gy, gm, gd) {
+  const gdm = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+  const gy2 = gm > 2 ? gy + 1 : gy;
+  let days = 355666 + 365 * gy + Math.floor((gy2 + 3) / 4) - Math.floor((gy2 + 99) / 100) + Math.floor((gy2 + 399) / 400) + gd + gdm[gm - 1];
+  let jy = -1595 + 33 * Math.floor(days / 12053);
+  days %= 12053;
+  jy += 4 * Math.floor(days / 1461);
+  days %= 1461;
+  if (days > 365) { jy += Math.floor((days - 1) / 365); days = (days - 1) % 365; }
+  const jm = days < 186 ? 1 + Math.floor(days / 31) : 7 + Math.floor((days - 186) / 30);
+  const jd = 1 + (days < 186 ? days % 31 : (days - 186) % 30);
+  return [jy, jm, jd];
+}
+function toGregorian(jy, jm, jd) {
+  jy += 1595;
+  let days = -355668 + 365 * jy + Math.floor(jy / 33) * 8 + Math.floor(((jy % 33) + 3) / 4) + jd + (jm < 7 ? (jm - 1) * 31 : (jm - 7) * 30 + 186);
+  let gy = 400 * Math.floor(days / 146097);
+  days %= 146097;
+  if (days > 36524) {
+    gy += 100 * Math.floor(--days / 36524);
+    days %= 36524;
+    if (days >= 365) days++;
+  }
+  gy += 4 * Math.floor(days / 1461);
+  days %= 1461;
+  if (days > 365) { gy += Math.floor((days - 1) / 365); days = (days - 1) % 365; }
+  let gd = days + 1;
+  const ml = [31, (gy % 4 === 0 && gy % 100 !== 0) || gy % 400 === 0 ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  let gm = 0;
+  while (gm < 12 && gd > ml[gm]) gd -= ml[gm++];
+  return [gy, gm + 1, gd];
+}
+function jalaliMonthDays(jy, jm) {
+  if (jm <= 6) return 31;
+  if (jm <= 11) return 30;
+  const [gy, gm, gd] = toGregorian(jy, 12, 30); // Esfand has 30 days only in a leap year
+  const back = toJalali(gy, gm, gd);
+  return back[1] === 12 && back[2] === 30 ? 30 : 29;
+}
+function fmtJalali(ms) {
+  const d = new Date(ms);
+  const [jy, jm, jd] = toJalali(d.getFullYear(), d.getMonth() + 1, d.getDate());
+  return `${faNum(jd)} ${JALALI_MONTHS[jm - 1]} ${faNum(jy)}، ساعت ${faNum(d.getHours(), 2)}:${faNum(d.getMinutes(), 2)}`;
+}
+
+const schedKey = () => `najva:sched:${room.id}`;
+async function loadSched() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(schedKey()) || 'null');
+    if (!raw || !room.histKey) return [];
+    const pt = await subtle.decrypt({ name: 'AES-GCM', iv: unb64u(raw.iv), additionalData: te.encode(`wn1/sched/${room.id}`) }, room.histKey, unb64u(raw.ct));
+    const list = JSON.parse(td.decode(pt));
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+async function saveSched(list) {
+  try {
+    if (!list.length) { localStorage.removeItem(schedKey()); return; }
+    const iv = rand(12);
+    const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv, additionalData: te.encode(`wn1/sched/${room.id}`) }, room.histKey, te.encode(JSON.stringify(list))));
+    localStorage.setItem(schedKey(), JSON.stringify({ iv: b64u(iv), ct: b64u(ct) }));
+  } catch {}
+}
+
+function buildScheduler() {
+  const modal = el('div', 'modal');
+  modal.id = 'sched-modal';
+  modal.hidden = true;
+  const card = el('div', 'modal-card sched-card');
+  card.setAttribute('role', 'dialog');
+  card.setAttribute('aria-modal', 'true');
+  const head = el('div', 'igm-head');
+  const titles = el('div');
+  titles.append(el('div', 'igm-kind', 'پیام زمان‌دار'), el('div', 'igm-from', 'در زمان تعیین‌شده فرستاده می‌شود، حتی اگر این دستگاه خاموش باشد'));
+  const close = el('button', 'btn-icon sm');
+  close.type = 'button';
+  close.setAttribute('aria-label', 'بستن');
+  close.append(icon('x'));
+  close.onclick = () => { modal.hidden = true; };
+  head.append(titles, close);
+  const text = el('textarea', 'cap-input sched-text');
+  text.id = 'sched-text';
+  text.rows = 3;
+  text.maxLength = 4000;
+  text.placeholder = 'متن پیام';
+  const sel = (id, label) => { const s = el('select'); s.id = id; s.setAttribute('aria-label', label); return s; };
+  const day = sel('sched-day', 'روز');
+  const month = sel('sched-month', 'ماه');
+  const year = sel('sched-year', 'سال');
+  const hour = sel('sched-hour', 'ساعت');
+  const minute = sel('sched-min', 'دقیقه');
+  const dateRow = el('div', 'sched-row');
+  dateRow.append(day, month, year);
+  const timeRow = el('div', 'sched-row sched-time');
+  timeRow.append(el('span', '', 'ساعت'), hour, el('span', '', ':'), minute);
+  const go = el('button', 'btn btn-primary wide', 'زمان‌بندی');
+  go.type = 'button';
+  go.id = 'sched-go';
+  const listTitle = el('div', 'sched-sub', 'در صف ارسال');
+  const list = el('ol', 'mg-list sched-list');
+  list.id = 'sched-list';
+  const empty = el('p', 'lib-empty', 'پیام زمان‌داری در صف نیست.');
+  empty.id = 'sched-empty';
+  card.append(head, text, dateRow, timeRow, go, listTitle, list, empty);
+  modal.append(card);
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.hidden = true; });
+  document.body.append(modal);
+
+  for (let h = 0; h < 24; h++) hour.append(new Option(faNum(h, 2), h));
+  for (let m = 0; m < 60; m++) minute.append(new Option(faNum(m, 2), m));
+  JALALI_MONTHS.forEach((n, i) => month.append(new Option(n, i + 1)));
+  const fillDays = () => {
+    const keep = Number(day.value) || 1;
+    const n = jalaliMonthDays(Number(year.value), Number(month.value));
+    day.textContent = '';
+    for (let d = 1; d <= n; d++) day.append(new Option(faNum(d), d));
+    day.value = String(Math.min(keep, n));
+  };
+  month.onchange = fillDays;
+  year.onchange = fillDays;
+  go.onclick = scheduleNow;
+}
+
+async function openScheduler() {
+  if (!room?.histKey) return;
+  if (!$('sched-modal')) buildScheduler();
+  closePanels();
+  // Start at the next whole hour, carrying over what was typed in the chat box.
+  const t = new Date(Date.now() + 3600000);
+  t.setMinutes(0, 0, 0);
+  const [jy, jm, jd] = toJalali(t.getFullYear(), t.getMonth() + 1, t.getDate());
+  const year = $('sched-year');
+  year.textContent = '';
+  for (let y = jy; y <= jy + 1; y++) year.append(new Option(faNum(y), y));
+  year.value = String(jy);
+  $('sched-month').value = String(jm);
+  $('sched-month').onchange();
+  $('sched-day').value = String(jd);
+  $('sched-hour').value = String(t.getHours());
+  $('sched-min').value = '0';
+  const typed = $('input').value.trim();
+  if (typed && !$('sched-text').value.trim()) $('sched-text').value = typed;
+  $('sched-modal').hidden = false;
+  await renderSched();
+}
+
+async function renderSched() {
+  const now = Date.now();
+  let items = await loadSched();
+  const live = items.filter((x) => x.at > now);
+  if (live.length !== items.length) { items = live; await saveSched(items); } // the delivered ones leave the queue
+  const list = $('sched-list');
+  list.textContent = '';
+  items.sort((a, b) => a.at - b.at);
+  for (const it of items) {
+    const li = el('li');
+    const info = el('div', 'mg-info');
+    info.append(el('div', 'mg-title', it.body), el('div', 'mg-meta', fmtJalali(it.at)));
+    const del = el('button', 'btn-icon sm');
+    del.type = 'button';
+    del.setAttribute('aria-label', 'لغو');
+    del.append(icon('trash'));
+    del.onclick = async (e) => {
+      e.stopPropagation();
+      if (!(await ask('لغو پیام زمان‌دار', 'این پیام فرستاده نمی‌شود و از سرور پاک می‌شود.', 'لغو کن'))) return;
+      const r = await storeFetch('/h/del', { method: 'POST', body: JSON.stringify({ ids: [it.id] }) }).catch(() => null);
+      if (!r || !r.ok) { toast('لغو نشد؛ دوباره امتحان کنید'); return; }
+      await saveSched((await loadSched()).filter((x) => x.id !== it.id));
+      renderSched();
+      toast('لغو شد');
+    };
+    li.append(info, del);
+    list.append(li);
+  }
+  $('sched-empty').hidden = items.length > 0;
+}
+
+async function scheduleNow() {
+  const body = $('sched-text').value.trim();
+  if (!body) { toast('متن پیام را بنویسید'); return; }
+  const [gy, gm, gd] = toGregorian(Number($('sched-year').value), Number($('sched-month').value), Number($('sched-day').value));
+  const at = new Date(gy, gm - 1, gd, Number($('sched-hour').value), Number($('sched-min').value)).getTime();
+  if (at < Date.now() + 60000) { toast('زمان باید دست‌کم یک دقیقه بعد از الان باشد'); return; }
+  if (at > Date.now() + 365 * 86400000) { toast('حداکثر تا یک سال بعد را می‌شود زمان‌بندی کرد'); return; }
+  const go = $('sched-go');
+  go.disabled = true;
+  try {
+    const msg = { k: 'text', id: b64u(rand(9)), body: body.slice(0, 4000), ttl, ts: at, a: myDev, an: myName };
+    await storeEvent(msg, { at });
+    const items = await loadSched();
+    items.push({ id: msg.id, at, body: msg.body.slice(0, 200) });
+    await saveSched(items);
+    $('sched-text').value = '';
+    if ($('input').value.trim() === body) { $('input').value = ''; autoGrow(); }
+    await renderSched();
+    toast(`زمان‌بندی شد: ${fmtJalali(at)}`);
+  } catch {
+    toast('زمان‌بندی انجام نشد؛ دوباره امتحان کنید');
+  } finally {
+    go.disabled = false;
+  }
+}
+
+// The relay says a scheduled message just came due: read the recent log and
+// show what is new (a reconnect does the same, for ones missed while offline).
+let dueRunning = false;
+async function fetchDue() {
+  if (dueRunning || !room?.histKey || $('chat').hidden) return;
+  dueRunning = true;
+  try {
+    const data = await fetchLogPage(null, Date.now() - 6 * 3600000);
+    if (!data) return;
+    const evs = (await mapLimit(data.items, 24, openEvent))
+      .filter((ev) => ev && ev.k === 'text' && !messages.has(ev.id) && !seen.has(ev.id))
+      .sort((a, b) => a.ts - b.ts);
+    for (const ev of evs) {
+      applyHistory(ev);
+      if (ev.a !== myDev) bumpUnread('msg');
+    }
+    if (evs.length) checkReads();
+  } finally {
+    dueRunning = false;
+  }
+}
+
+function bindScheduler() {
+  let taps = [];
+  $('peer-title').addEventListener('click', () => {
+    const now = Date.now();
+    taps = taps.filter((t) => now - t < 3000);
+    taps.push(now);
+    if (taps.length >= 5) { taps = []; openScheduler(); }
+  });
 }
 
 // ---------- gif picker ----------
@@ -4735,7 +4986,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-16.15';
+const APP_VERSION = '2026-10-16.16';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.
@@ -5881,6 +6132,7 @@ function bindUi() {
   bindManager();
   bindRail();
   bindVeil();
+  bindScheduler();
   $('messages').addEventListener('scroll', () => { if ($('messages').scrollTop < 60) loadHistory(false); updateToBottom(); }, { passive: true });
   $('to-bottom').onclick = () => {
     const list = $('messages');
