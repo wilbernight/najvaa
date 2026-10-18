@@ -408,7 +408,7 @@ async function endSession(pid) {
   // peer-to-peer and usually survives a network blip. Hold the call and give
   // the signaling time to come back (a fresh handshake re-arms it).
   if (call && (call.peer === pid || (!call.peer && !anySecure()))) armGrace(call);
-  for (const [id, inc] of incoming) if (inc.from === pid) { failTransfer(inc.entry); incoming.delete(id); }
+  for (const [id, inc] of incoming) if (inc.from === pid) { incoming.delete(id); finishFromStore(inc); }
   wipe(s.root, s.sas, s.send?.ck);
   if (s.recv) for (const ch of s.recv.values()) wipe(ch.ck);
   if (s.skipped) for (const mk of s.skipped.values()) wipe(mk);
@@ -941,8 +941,9 @@ function tickTimers() {
   }
   for (const s of stacks) updateStackTimer(s);
   for (const [id, exp] of seen) if (exp < now) seen.delete(id);
-  // A transfer that stopped (the sender went away or failed) must not spin forever.
-  for (const [id, inc] of incoming) if (now - inc.lastAt > 60000) { failTransfer(inc.entry); incoming.delete(id); }
+  // A live transfer that stopped (the sender went away, or the relay dropped
+  // chunks for a slow link) finishes from the copy the sender stores.
+  for (const [id, inc] of incoming) if (now - inc.lastAt > 30000) { incoming.delete(id); finishFromStore(inc); }
 }
 
 function removeEntry(entry) {
@@ -2342,7 +2343,12 @@ async function sendFileNow(file, gif = false, extra = null) {
   bar.parentElement?.remove();
   if (uploadFailed) { entry.el.classList.add('failed'); toast('ذخیره‌ی فایل روی سرور انجام نشد'); return; }
   // The file entry goes into history only once all its chunks are on the server.
-  storeEvent(meta, { blob: true }).then(() => { entry.stored = true; }).catch(() => toast('ذخیره‌ی فایل روی سرور انجام نشد'));
+  storeEvent(meta, { blob: true }).then(() => {
+    entry.stored = true;
+    // A device that was not getting it live (it joined or reconnected midway)
+    // picks it up from the log now.
+    for (const pid of sessions.keys()) if (!targets.includes(pid)) wireSend({ t: 'due', to: pid });
+  }).catch(() => toast('ذخیره‌ی فایل روی سرور انجام نشد'));
 }
 
 function renderFile(meta, dir) {
@@ -2474,18 +2480,14 @@ function finalizeMediaBody(entry, blob, meta) {
   entry.content.append(wrap);
 }
 
-function failTransfer(entry) {
-  if (!entry || !messages.has(entry.id)) return;
-  entry.el.classList.add('failed');
-  entry.el.querySelector('.progress')?.remove();
-  if (!entry.url) {
-    entry.content.textContent = '';
-    const box = el('div', 'media-loading');
-    box.append(icon('alert'), el('div', '', 'انتقال کامل نشد'));
-    entry.content.append(box);
-  }
-  entry.ready = true;
-  if (!entry.expires) entry.expires = Date.now() + 15000;
+// The sender uploads every chunk to the server alongside the live copy, so a
+// live transfer that broke off fetches what is missing from there, waiting for
+// chunks the sender has not uploaded yet.
+function finishFromStore(inc) {
+  const { entry, meta } = inc;
+  if (!entry || !messages.has(entry.id) || entry.ready) return;
+  entry.remote = { meta, key: inc.key, have: inc.parts, wait: true };
+  downloadRemote(entry);
 }
 
 async function onFileMeta(s, o) {
@@ -3427,14 +3429,25 @@ const blobObserver = new IntersectionObserver((list) => {
 }, { rootMargin: '400px' });
 
 // Fetch and decrypt a stored file. `alive()` false stops early (message gone).
-async function fetchRemoteBlob(meta, keyB64, alive, onProgress) {
-  const aes = await subtle.importKey('raw', unb64u(keyB64), 'AES-GCM', false, ['decrypt']);
+// `key` is the base64 key or an imported one. `have` holds chunks already
+// received live; with `wait`, a chunk not on the server yet (still being
+// uploaded) is polled for until nothing new has turned up for a few minutes.
+async function fetchRemoteBlob(meta, key, alive, onProgress, { have = null, wait = false } = {}) {
+  const aes = typeof key === 'string' ? await subtle.importKey('raw', unb64u(key), 'AES-GCM', false, ['decrypt']) : key;
   const idBytes = unb64u(meta.id);
   const parts = [];
+  let lastNew = Date.now();
   for (let i = 0; i < meta.total; i++) {
     if (!alive()) return null;
-    const r = await storeFetch(`/h/blob/${meta.id}/${i}`, { timeout: 90000 });
-    if (!r.ok) throw new Error('missing');
+    if (have?.[i]) { parts.push(have[i]); onProgress?.((i + 1) / meta.total); continue; }
+    const r = await storeFetch(`/h/blob/${meta.id}/${i}`, { timeout: 90000 }).catch((e) => { if (!wait) throw e; return null; });
+    if (!r?.ok) {
+      if (!wait || (r && r.status !== 404) || Date.now() - lastNew > 180000) throw new Error('missing');
+      await sleep(3000);
+      i--;
+      continue;
+    }
+    lastNew = Date.now();
     const ct = new Uint8Array(await r.arrayBuffer());
     const pt = new Uint8Array(await subtle.decrypt({ name: 'AES-GCM', iv: chunkIv(i), additionalData: chunkAad(idBytes, i, meta.total) }, aes, ct));
     parts.push(pt.subarray(0, i < meta.total - 1 ? CHUNK : meta.size - (meta.total - 1) * CHUNK));
@@ -3451,7 +3464,7 @@ async function downloadRemote(entry) {
     const blob = await fetchRemoteBlob(meta, job.key, () => messages.has(meta.id), (f) => {
       const bar = entry.loading?.querySelector('.progress i');
       if (bar) bar.style.width = `${f * 100}%`;
-    });
+    }, job);
     if (!blob || !messages.has(meta.id)) return;
     finalizeMedia(entry, blob, meta);
     entry.ready = true;
@@ -4072,7 +4085,7 @@ async function fetchDue() {
     const items = data.items.filter((it) => it.ts > after); // an older relay ignores `after`
     if (items.length) dueAfter = Math.max(dueAfter, items[0].ts);
     const evs = (await mapLimit(items, 24, openEvent))
-      .filter((ev) => ev && ev.k === 'text' && !messages.has(ev.id) && !seen.has(ev.id))
+      .filter((ev) => ev && (ev.k === 'text' || ev.k === 'file') && !messages.has(ev.id) && !seen.has(ev.id))
       .sort((a, b) => a.ts - b.ts);
     for (const ev of evs) {
       applyHistory(ev);
@@ -4995,7 +5008,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-17.1';
+const APP_VERSION = '2026-10-18.1';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.

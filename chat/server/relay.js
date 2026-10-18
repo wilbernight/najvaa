@@ -852,6 +852,7 @@ server.on('upgrade', (req, socket, head) => {
 // frame names its destination device; the relay stamps the sender and passes
 // the opaque payload on. It never sees keys or plaintext.
 const MAX_PEERS = 3;
+const RELAY_BUFFER = 4 * 1024 * 1024;
 
 function peerById(set, id) {
   for (const s of set) if (s.cid === id) return s;
@@ -911,12 +912,20 @@ async function onConnection(ws, roomId, cid, fresh) {
   ws.on('pong', () => { ws.alive = true; });
 
   ws.on('message', (data, isBinary) => {
+    // Anything from the client proves it is there. While it uploads a large
+    // file its pong can sit behind megabytes of chunks for longer than one
+    // heartbeat, and the socket must not be cut for that.
+    ws.alive = true;
     if (--ws.budget < 0) return ws.close(4008, 'rate');
     if (isBinary) {
       // Encrypted file chunk: [1][to 12 bytes][...] -> [1][from 12 bytes][...]
       if (data.length < 14 || data[0] !== 1) return;
       const peer = peerById(set, data.subarray(1, 13).toString('base64url'));
       if (!peer || peer === ws || peer.readyState !== peer.OPEN) return;
+      // A receiver on a slower link than the sender would otherwise queue the
+      // whole file here and fall behind its heartbeat. Past this it gets the
+      // rest from the stored copy instead.
+      if (peer.bufferedAmount > RELAY_BUFFER) return;
       const out = Buffer.from(data);
       ws.cidBytes.copy(out, 1);
       peer.send(out, { binary: true });
