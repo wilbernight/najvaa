@@ -3846,6 +3846,39 @@ const UNVEIL_SEL = '.body, .ig-title, .music-title, .file-card .name, .quote-tex
 // Once the unveil has run, the text switches to plain styles. Chrome does not
 // always repaint the last frame of the animation, which left the part farthest
 // from the finger (often the start of the message) still dotted.
+// Where the unveil starts and how it runs (see "unveil" in style.css): from
+// the finger, or the middle of each line. As Telegram (SpoilerEffect.startRipple)
+// the radius is the block's diagonal, the reveal is linear and lasts radius x
+// 0.3 ms in device pixels, kept between 250 and 550 ms. The text stays under an
+// opaque cover in the exact colour behind it until the circle reaches it.
+function setUnveil(m, cx, cy) {
+  for (const t of m.querySelectorAll(UNVEIL_SEL)) {
+    const r = t.getBoundingClientRect();
+    const x = cx == null ? r.width / 2 : cx - r.left, y = cy == null ? r.height / 2 : cy - r.top;
+    const rad = Math.hypot(r.width, r.height);
+    t.style.setProperty('--px', `${Math.round(x)}px`);
+    t.style.setProperty('--py', `${Math.round(y)}px`);
+    t.style.setProperty('--rmax', `${Math.round(rad)}px`);
+    t.style.setProperty('--rdur', `${Math.round(Math.min(550, Math.max(250, rad * devicePixelRatio * 0.3)))}ms`);
+    t.style.setProperty('--cover', colourBehind(t));
+  }
+}
+// The solid colour a line of text sits on: its nearest opaque background with
+// every translucent one between (a quote box, a reply tint) laid over it.
+function colourBehind(node) {
+  const layers = [];
+  for (let n = node; n && n.nodeType === 1; n = n.parentElement) {
+    const bg = getComputedStyle(n).backgroundColor;
+    const c = bg.match(/[\d.]+/g)?.map(Number);
+    if (c && bg.startsWith('color(srgb')) for (let i = 0; i < 3; i++) c[i] *= 255;
+    if (!c || (c.length > 3 && c[3] === 0)) continue;
+    layers.push(c);
+    if (c.length === 3 || c[3] >= 1) break;
+  }
+  let [r, g, b] = layers.length && (layers.at(-1).length === 3 || layers.at(-1)[3] >= 1) ? layers.pop() : [18, 18, 18];
+  for (const c of layers.reverse()) { const a = c[3]; r = r * (1 - a) + c[0] * a; g = g * (1 - a) + c[1] * a; b = b * (1 - a) + c[2] * a; }
+  return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
+}
 function unveilDone(m) {
   for (const t of m.querySelectorAll(UNVEIL_SEL)) {
     if (t.classList.contains('unveiled') || t._unveil) continue;
@@ -3859,19 +3892,7 @@ function bindVeil() {
   $('messages').addEventListener('pointerdown', (e) => {
     const m = e.target.closest('.msg, .act');
     if (!m || !veilOn) return;
-    // The unveil spreads from the finger (see "unveil" in style.css).
-    for (const t of m.querySelectorAll(UNVEIL_SEL)) {
-      const r = t.getBoundingClientRect();
-      const x = e.clientX - r.left, y = e.clientY - r.top;
-      t.style.setProperty('--px', `${Math.round(x)}px`);
-      t.style.setProperty('--py', `${Math.round(y)}px`);
-      // As Telegram (SpoilerEffect.startRipple): the radius is the block's
-      // diagonal, the reveal is linear and lasts radius x 0.3 ms in device
-      // pixels, kept between 250 and 550 ms.
-      const rad = Math.hypot(r.width, r.height);
-      t.style.setProperty('--rmax', `${Math.round(rad)}px`);
-      t.style.setProperty('--rdur', `${Math.round(Math.min(550, Math.max(250, rad * devicePixelRatio * 0.3)))}ms`);
-    }
+    setUnveil(m, e.clientX, e.clientY);
     m.classList.add('peek');
     unveilDone(m);
   });
@@ -3885,7 +3906,12 @@ function bindVeil() {
     const m = e.target.closest?.('.msg, .act');
     if (m && !m.contains(e.relatedTarget) && !m.classList.contains('peek') && !m.classList.contains('reveal')) clearUnveiled(m);
   });
-  $('messages').addEventListener('mouseover', (e) => { const m = e.target.closest?.('.msg, .act'); if (m && veilOn) unveilDone(m); });
+  $('messages').addEventListener('mouseover', (e) => {
+    const m = e.target.closest?.('.msg, .act');
+    if (!m || !veilOn || m.contains(e.relatedTarget)) return;
+    if (!m.classList.contains('peek') && !m.classList.contains('reveal')) setUnveil(m); // a hover unveils from the middle
+    unveilDone(m);
+  });
   window.addEventListener('pointerup', unpeek);
   window.addEventListener('pointercancel', unpeek);
   window.addEventListener('blur', unpeek);
@@ -5043,7 +5069,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-22.5';
+const APP_VERSION = '2026-10-22.6';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.
