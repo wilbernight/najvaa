@@ -3852,7 +3852,12 @@ function bindVeil() {
       const x = e.clientX - r.left, y = e.clientY - r.top;
       t.style.setProperty('--px', `${Math.round(x)}px`);
       t.style.setProperty('--py', `${Math.round(y)}px`);
-      t.style.setProperty('--rmax', `${Math.round(Math.hypot(Math.max(x, r.width - x), Math.max(y, r.height - y)))}px`); // to the farthest corner
+      // As Telegram (SpoilerEffect.startRipple): the radius is the block's
+      // diagonal, the reveal is linear and lasts radius x 0.3 ms in device
+      // pixels, kept between 250 and 550 ms.
+      const rad = Math.hypot(r.width, r.height);
+      t.style.setProperty('--rmax', `${Math.round(rad)}px`);
+      t.style.setProperty('--rdur', `${Math.round(Math.min(550, Math.max(250, rad * devicePixelRatio * 0.3)))}ms`);
     }
     m.classList.add('peek');
   });
@@ -5018,7 +5023,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-22.2';
+const APP_VERSION = '2026-10-22.3';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.
