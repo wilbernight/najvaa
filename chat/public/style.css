@@ -1060,19 +1060,15 @@ body.veil #ig-modal.peek .ig-reply-prev { -webkit-text-fill-color: unset; backgr
 .sched-list .mg-title { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 
 /* Telegram-style unveil: when a veiled line is held (or its eye tapped) the
-   text shows through a circle that grows from the finger while the dots
-   outside it fade, with Telegram's timing (linear, --rdur). --px/--py/--rmax/
-   --rdur are set on pointerdown; a mouse hover starts from the middle. */
+   text is there at once and the dots over it clear in a circle that grows
+   from the finger, fading as they go, with Telegram's timing (linear,
+   --rdur). Only the dot layer is animated: animating the text itself made
+   long messages lag and left their start blank for a moment. --px/--py/
+   --rmax/--rdur are set on pointerdown; a mouse hover starts from the middle. */
 @property --rv { syntax: '<length>'; inherits: false; initial-value: 0px; }
-@keyframes unveil-text { from { --rv: 0px; } to { --rv: var(--rmax, 240px); } }
 @keyframes unveil-dots { from { --rv: 0px; opacity: 1; } to { --rv: var(--rmax, 240px); opacity: 0; } }
 body.veil :is(.msg.peek, .msg.reveal, .act.peek) :is(.body, .ig-title, .music-title, .file-card .name, .quote-text, .edit-prev-text, .snip) {
-  position: relative;
-  -webkit-text-fill-color: transparent;
-  background-image: radial-gradient(circle at var(--px, 50%) var(--py, 50%), currentColor var(--rv), transparent calc(var(--rv) + 1.5px));
-  background-size: auto;
-  -webkit-background-clip: text; background-clip: text;
-  animation: unveil-text var(--rdur, 400ms) linear both;
+  position: relative; -webkit-text-fill-color: unset; background-image: none; animation: none;
 }
 body.veil :is(.msg.peek, .msg.reveal, .act.peek) :is(.body, .ig-title, .music-title, .file-card .name, .quote-text, .edit-prev-text, .snip)::after {
   content: ""; position: absolute; inset: 0; pointer-events: none;
@@ -1083,12 +1079,7 @@ body.veil :is(.msg.peek, .msg.reveal, .act.peek) :is(.body, .ig-title, .music-ti
 }
 @media (hover: hover) {
   body.veil :is(.msg:hover, .act:hover) :is(.body, .ig-title, .music-title, .file-card .name, .quote-text, .edit-prev-text, .snip) {
-    position: relative;
-    -webkit-text-fill-color: transparent;
-    background-image: radial-gradient(circle at var(--px, 50%) var(--py, 50%), currentColor var(--rv), transparent calc(var(--rv) + 1.5px));
-    background-size: auto;
-    -webkit-background-clip: text; background-clip: text;
-    animation: unveil-text var(--rdur, 400ms) linear both;
+    position: relative; -webkit-text-fill-color: unset; background-image: none; animation: none;
   }
   body.veil :is(.msg:hover, .act:hover) :is(.body, .ig-title, .music-title, .file-card .name, .quote-text, .edit-prev-text, .snip)::after {
     content: ""; position: absolute; inset: 0; pointer-events: none;
@@ -1101,7 +1092,3 @@ body.veil :is(.msg.peek, .msg.reveal, .act.peek) :is(.body, .ig-title, .music-ti
 /* after the unveil (see unveilDone in app.js): plain text, no overlay */
 body.veil :is(.msg.peek, .msg.reveal, .act.peek, .msg:hover, .act:hover) :is(.body, .ig-title, .music-title, .file-card .name, .quote-text, .edit-prev-text, .snip).unveiled { -webkit-text-fill-color: unset; background: none; -webkit-background-clip: border-box; background-clip: border-box; animation: none; }
 body.veil :is(.msg.peek, .msg.reveal, .act.peek, .msg:hover, .act:hover) :is(.body, .ig-title, .music-title, .file-card .name, .quote-text, .edit-prev-text, .snip).unveiled::after { content: none; }
-@media (prefers-reduced-motion: reduce) {
-  body.veil :is(.msg.peek, .msg.reveal, .act.peek) :is(.body, .ig-title, .music-title, .file-card .name, .quote-text, .edit-prev-text, .snip),
-  body.veil :is(.msg.peek, .msg.reveal, .act.peek) :is(.body, .ig-title, .music-title, .file-card .name, .quote-text, .edit-prev-text, .snip)::after { animation-duration: .01s !important; }
-}

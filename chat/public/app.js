@@ -5043,14 +5043,14 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-22.4';
+const APP_VERSION = '2026-10-22.5';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.
 let updateOffered = false;
 let updateChecking = false;
 async function checkUpdate() {
-  if (updateOffered || updateChecking || document.hidden) return;
+  if (updateOffered || updateChecking) return;
   updateChecking = true;
   try {
     const r = await fetch('/version.json', { cache: 'no-store', credentials: 'omit' });
@@ -5067,25 +5067,39 @@ function applyUpdate() {
 }
 
 // The relay announces each release (welcome.ver, and {t:'ver'} the moment it
-// is published). Update at once unless that would cut something off: a call,
-// a recording, an upload, an edit or a half-typed message get the blue bar
-// instead, and the update happens as soon as the app goes to the background.
+// is published). Updating is mandatory: nobody keeps running an old version.
+// It happens at once unless that would cut something off - a call, a
+// recording, an upload, or a message or edit being typed - and then as soon as
+// that is over (checked every few seconds, and when the app goes to the
+// background). A draft or edit left untouched for two minutes no longer holds it.
+let lastTyped = 0;
+let updateTimer = 0;
 function updateBlocked() {
-  return !!(call || rec || editing || uploading || Date.now() < pickingUntil || $('input').value.trim() || !$('upload-hint').hidden);
+  const typing = ($('input').value.trim() || editing) && Date.now() - lastTyped < 120000;
+  return !!(call || rec || uploading || Date.now() < pickingUntil || typing || !$('upload-hint').hidden);
 }
 function newVersion(v) {
   if (v === APP_VERSION) return;
   updateOffered = true;
-  // A half-finished deploy (new version.json, old app.js) must not reload in a loop.
+  tryUpdate(v);
+}
+function tryUpdate(v) {
+  clearTimeout(updateTimer);
+  // A half-finished deploy (new version.json, old app.js) must not reload in a
+  // loop: after one reload that did not bring the new version, wait a minute.
   let again = false;
   try {
     const last = JSON.parse(sessionStorage.getItem('najva:forced') || 'null');
     again = !!last && last.v === v && Date.now() - last.at < 60000;
-    if (!again) sessionStorage.setItem('najva:forced', JSON.stringify({ v, at: Date.now() }));
   } catch {}
-  if (!again && $('chat').hidden) { leaving = true; location.reload(); return; }
-  if (!again && !updateBlocked()) { applyUpdate(); return; }
+  if (again) { $('update-bar').hidden = false; updateTimer = setTimeout(() => tryUpdate(v), 60000); return; }
+  if ($('chat').hidden || !updateBlocked()) {
+    try { sessionStorage.setItem('najva:forced', JSON.stringify({ v, at: Date.now() })); } catch {}
+    if ($('chat').hidden) { leaving = true; location.reload(); } else applyUpdate();
+    return;
+  }
   $('update-bar').hidden = false;
+  updateTimer = setTimeout(() => tryUpdate(v), 3000);
 }
 
 // ---------- emoji: Animated Fluent set ----------
@@ -6155,6 +6169,7 @@ function bindUi() {
     }
   });
   $('input').addEventListener('input', () => {
+    lastTyped = Date.now();
     autoGrow();
     if (anySecure() && Date.now() - lastTypingSent > 3000) {
       lastTypingSent = Date.now();
