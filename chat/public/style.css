@@ -731,6 +731,15 @@ body.veil .msg.peek .body img.emo, body.veil .msg.reveal .body img.emo, body.vei
 body.veil .msg.peek .ig-title img.emo, body.veil .msg.reveal .ig-title img.emo { object-position: 50% 50%; background: none; animation: none; }
 body.veil .msg.reveal .body, body.veil .msg.reveal .ig-title, body.veil .msg.reveal .music-title, body.veil .msg.reveal .file-card .name { -webkit-text-fill-color: unset; background-image: none; animation: none; }
 @media (hover: hover) { body.veil .msg:hover .gif-mini, body.veil .msg:hover .body img.emo, body.veil .act:hover .snip img.emo, body.veil .msg:hover .ig-title img.emo, body.veil .mg-list li:hover .mg-title img.emo { object-position: 50% 50%; background: none; animation: none; } }
+/* Emoji are pictures, so a transparent text fill does not hide them: every
+   other veiled line (quotes, edit history, reactions, Instagram replies) puts
+   the spoiler on its emoji too. */
+body.veil :is(.msg .quote-text, .msg .edit-prev-text, .msg .reacts, .act, .ig-reply-prev, .igm-title, .igm-note, .igm-replies) img.emo {
+  object-position: -9999px -9999px; border-radius: 6px; background-color: rgba(127,127,127,.2); background-image: var(--spoil); background-size: var(--spoil-size); animation: spoil 4s linear infinite;
+}
+body.veil :is(.msg.peek, .msg.reveal) :is(.quote-text, .edit-prev-text, .reacts) img.emo, body.veil .act.peek img.emo,
+body.veil #ig-modal.peek :is(.ig-reply-prev, .igm-title, .igm-note, .igm-replies) img.emo { object-position: 50% 50%; background: none; animation: none; }
+@media (hover: hover) { body.veil .msg:hover :is(.quote-text, .edit-prev-text, .reacts) img.emo, body.veil .act:hover img.emo, body.veil :is(.igm-title, .igm-note, .igm-replies):hover img.emo { object-position: 50% 50%; background: none; animation: none; } }
 .peek-btn { display: none; width: 26px; height: 22px; border-radius: 8px; place-items: center; color: inherit; opacity: .85; margin-inline-end: 2px; }
 .peek-btn .i { width: 15px; height: 15px; }
 body.veil .peek-btn { display: inline-grid; }
@@ -888,6 +897,8 @@ body.veil .msg.peek .quote-text, body.veil .msg.reveal .quote-text { -webkit-tex
   .row-snip.status { color: var(--text-3); }
   body.veil .row-snip:not(.status) { -webkit-text-fill-color: transparent; background-image: var(--spoil); background-size: var(--spoil-size); animation: spoil 4s linear infinite; }
   body.veil .chat-row:hover .row-snip { -webkit-text-fill-color: unset; background-image: none; animation: none; }
+  body.veil .row-snip:not(.status) img.emo { object-position: -9999px -9999px; border-radius: 6px; background-color: rgba(127,127,127,.2); background-image: var(--spoil); background-size: var(--spoil-size); animation: spoil 4s linear infinite; }
+  body.veil .chat-row:hover .row-snip img.emo { object-position: 50% 50%; background: none; animation: none; }
   .row-badge { flex: none; }
   .rail-room { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 2px 0; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); flex: none; }
   .rail-room-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); }
