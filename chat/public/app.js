@@ -3841,10 +3841,20 @@ function applyVeil() {
   document.body.classList.toggle('veil', veilOn);
   $('veil-switch').classList.toggle('on', veilOn);
 }
+const UNVEIL_SEL = '.body, .ig-title, .music-title, .file-card .name, .quote-text, .edit-prev-text, .snip';
 function bindVeil() {
   $('messages').addEventListener('pointerdown', (e) => {
     const m = e.target.closest('.msg, .act');
-    if (m && veilOn) m.classList.add('peek');
+    if (!m || !veilOn) return;
+    // The unveil spreads from the finger (see "unveil" in style.css).
+    for (const t of m.querySelectorAll(UNVEIL_SEL)) {
+      const r = t.getBoundingClientRect();
+      const x = e.clientX - r.left, y = e.clientY - r.top;
+      t.style.setProperty('--px', `${Math.round(x)}px`);
+      t.style.setProperty('--py', `${Math.round(y)}px`);
+      t.style.setProperty('--rmax', `${Math.round(Math.hypot(Math.max(x, r.width - x), Math.max(y, r.height - y)))}px`); // to the farthest corner
+    }
+    m.classList.add('peek');
   });
   // The Instagram post sheet: hold the picture or the text to see it.
   $('ig-modal').addEventListener('pointerdown', (e) => {
@@ -5008,7 +5018,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-22.1';
+const APP_VERSION = '2026-10-22.2';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.
