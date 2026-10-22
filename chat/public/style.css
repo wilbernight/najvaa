@@ -1098,6 +1098,9 @@ body.veil :is(.msg.peek, .msg.reveal, .act.peek) :is(.body, .ig-title, .music-ti
     animation: unveil-dots var(--rdur, 400ms) linear both;
   }
 }
+/* after the unveil (see unveilDone in app.js): plain text, no overlay */
+body.veil :is(.msg.peek, .msg.reveal, .act.peek, .msg:hover, .act:hover) :is(.body, .ig-title, .music-title, .file-card .name, .quote-text, .edit-prev-text, .snip).unveiled { -webkit-text-fill-color: unset; background: none; -webkit-background-clip: border-box; background-clip: border-box; animation: none; }
+body.veil :is(.msg.peek, .msg.reveal, .act.peek, .msg:hover, .act:hover) :is(.body, .ig-title, .music-title, .file-card .name, .quote-text, .edit-prev-text, .snip).unveiled::after { content: none; }
 @media (prefers-reduced-motion: reduce) {
   body.veil :is(.msg.peek, .msg.reveal, .act.peek) :is(.body, .ig-title, .music-title, .file-card .name, .quote-text, .edit-prev-text, .snip),
   body.veil :is(.msg.peek, .msg.reveal, .act.peek) :is(.body, .ig-title, .music-title, .file-card .name, .quote-text, .edit-prev-text, .snip)::after { animation-duration: .01s !important; }

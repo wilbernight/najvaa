@@ -780,8 +780,9 @@ function createEntry({ id, dir, ttl: life, kind, snippet, from, ts }) {
     clearTimeout(li._reveal);
     const on = !li.classList.contains('reveal');
     li.classList.toggle('reveal', on);
+    if (on) unveilDone(li); else if (!li.classList.contains('peek')) clearUnveiled(li);
     eye.firstChild.querySelector('use').setAttribute('href', on ? '#i-eye-off' : '#i-eye');
-    if (on) li._reveal = setTimeout(() => { li.classList.remove('reveal'); eye.firstChild.querySelector('use').setAttribute('href', '#i-eye'); }, 10000);
+    if (on) li._reveal = setTimeout(() => { li.classList.remove('reveal'); if (!li.classList.contains('peek')) clearUnveiled(li); eye.firstChild.querySelector('use').setAttribute('href', '#i-eye'); }, 10000);
   };
   meta.prepend(eye);
   const reactBtn = el('button', 'react-btn');
@@ -3842,6 +3843,18 @@ function applyVeil() {
   $('veil-switch').classList.toggle('on', veilOn);
 }
 const UNVEIL_SEL = '.body, .ig-title, .music-title, .file-card .name, .quote-text, .edit-prev-text, .snip';
+// Once the unveil has run, the text switches to plain styles. Chrome does not
+// always repaint the last frame of the animation, which left the part farthest
+// from the finger (often the start of the message) still dotted.
+function unveilDone(m) {
+  for (const t of m.querySelectorAll(UNVEIL_SEL)) {
+    if (t.classList.contains('unveiled') || t._unveil) continue;
+    t._unveil = setTimeout(() => { t._unveil = 0; t.classList.add('unveiled'); }, (parseInt(t.style.getPropertyValue('--rdur')) || 400) + 40);
+  }
+}
+function clearUnveiled(m) {
+  for (const t of m.querySelectorAll(UNVEIL_SEL)) { clearTimeout(t._unveil); t._unveil = 0; t.classList.remove('unveiled'); }
+}
 function bindVeil() {
   $('messages').addEventListener('pointerdown', (e) => {
     const m = e.target.closest('.msg, .act');
@@ -3860,12 +3873,19 @@ function bindVeil() {
       t.style.setProperty('--rdur', `${Math.round(Math.min(550, Math.max(250, rad * devicePixelRatio * 0.3)))}ms`);
     }
     m.classList.add('peek');
+    unveilDone(m);
   });
   // The Instagram post sheet: hold the picture or the text to see it.
   $('ig-modal').addEventListener('pointerdown', (e) => {
     if (veilOn && e.target.closest('.igm-media, .igm-title, .igm-note, .igm-replies')) $('ig-modal').classList.add('peek');
   });
-  const unpeek = () => { for (const m of document.querySelectorAll('.peek')) m.classList.remove('peek'); };
+  const unpeek = () => { for (const m of document.querySelectorAll('.peek')) { m.classList.remove('peek'); if (!m.classList.contains('reveal')) clearUnveiled(m); } };
+  // The dots come back when the mouse leaves a message it was hovering.
+  $('messages').addEventListener('mouseout', (e) => {
+    const m = e.target.closest?.('.msg, .act');
+    if (m && !m.contains(e.relatedTarget) && !m.classList.contains('peek') && !m.classList.contains('reveal')) clearUnveiled(m);
+  });
+  $('messages').addEventListener('mouseover', (e) => { const m = e.target.closest?.('.msg, .act'); if (m && veilOn) unveilDone(m); });
   window.addEventListener('pointerup', unpeek);
   window.addEventListener('pointercancel', unpeek);
   window.addEventListener('blur', unpeek);
@@ -5023,7 +5043,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-22.3';
+const APP_VERSION = '2026-10-22.4';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.
