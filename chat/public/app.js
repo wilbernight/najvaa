@@ -642,6 +642,9 @@ async function onInner(s, o) {
       clearMessages();
       notice(`${who()} گفتگو را برای همه پاک کرد`);
       break;
+    case 'dl':
+      applyDl({ ...o, a: authorOf(s, o) }, true);
+      break;
     case 'saved': {
       const m = messages.get(o.id);
       const what = m?.kind === 'audio' ? `موزیک «${m.title}»` : m?.kind === 'video' ? 'یک ویدیو' : m?.kind === 'image' ? 'یک عکس' : 'یک مورد';
@@ -810,7 +813,7 @@ function createEntry({ id, dir, ttl: life, kind, snippet, from, ts }) {
   reacts.onclick = (e) => { e.stopPropagation(); openReactBar(entry); };
   li.addEventListener('dblclick', (e) => {
     if (Date.now() - lastTouchTapAt < 800) return; // handled by the touch double-tap
-    if (e.target.closest('.media-wrap, .ig-card, .react-btn, .gif-mini, .voice-msg, .quote')) return;
+    if (e.target.closest('.media-wrap, .ig-card, .react-btn, .gif-mini, .voice-msg, .quote, .dl-row, .music-dl')) return;
     setReaction(entry, entry.react.me === '❤️' ? null : '❤️');
   });
   entry.heart = () => setReaction(entry, entry.react.me === '❤️' ? null : '❤️');
@@ -956,6 +959,7 @@ function removeEntry(entry) {
   readObserver.unobserve(entry.el);
   visibleUnread.delete(entry);
   for (const a of Object.values(entry.acts)) if (a) removeAct(a);
+  dlForget(entry.id);
   if (entry.url) URL.revokeObjectURL(entry.url);
   for (const v of entry.versions || []) if (v.url && v.url !== entry.url) URL.revokeObjectURL(v.url);
   entry.content.textContent = '';
@@ -978,6 +982,11 @@ function clearMessages() {
   mgEdits.clear();
   pendingEdits.clear();
   pendingNotes.clear();
+  dlReqs.clear();
+  dlFiles.clear();
+  pendingDl.clear();
+  dlScanAfter = 0;
+  refreshDl();
   if (editing) cancelEdit();
   $('empty-state').hidden = false;
 }
@@ -2156,7 +2165,8 @@ function updateRun(run) {
   const stack = el('span', 'stack');
   for (const e of [...new Set(items.map((i) => i.dataset.e))].slice(0, 4)) stack.append(el('span', '', e));
   const allIg = items.every((i) => i.dataset.ig);
-  s.append(stack, document.createTextNode(`${fa(items.length)} واکنش${allIg ? ' به پست‌های اینستاگرام' : ''}`), icon('arrow', 'chev'));
+  const allDl = items.every((i) => i.dataset.dl);
+  s.append(stack, document.createTextNode(allDl ? `${fa(items.length)} درخواست و اجازه‌ی دانلود` : `${fa(items.length)} واکنش${allIg ? ' به پست‌های اینستاگرام' : ''}`), icon('arrow', 'chev'));
   s.lastChild.style.transform = run.classList.contains('open') ? 'rotate(90deg)' : 'rotate(-90deg)';
 }
 
@@ -2373,6 +2383,7 @@ function renderFile(meta, dir) {
   entry.content.append(box);
   if (entry.caption) entry.content.append(el('div', 'body caption', entry.caption));
   entry.loading = box;
+  dlDrain(entry.id);
   return entry;
 }
 
@@ -2429,7 +2440,13 @@ function finalizeMediaBody(entry, blob, meta) {
     save.title = 'ماندگار در حافظه‌ی همین دستگاه';
     save.append(icon('pin'), el('span', '', 'ماندگار'));
     save.onclick = (e) => { e.stopPropagation(); saveTrack(entry, save); };
-    card.append(play, info, save);
+    const dl = el('button', 'music-save music-dl');
+    dl.type = 'button';
+    dl.title = 'ذخیره روی گوشی';
+    dl.setAttribute('aria-label', 'ذخیره روی گوشی');
+    dl.append(icon('download'));
+    dl.onclick = (e) => { e.stopPropagation(); dlSave(entry.id); };
+    card.append(play, info, dl, save);
     entry.content.append(card);
     entry.playBtn = play;
     entry.el.classList.remove('media');
@@ -2451,17 +2468,20 @@ function finalizeMediaBody(entry, blob, meta) {
     return;
   }
   if (kind === 'file') {
-    const safe = new Blob([blob], { type: 'application/octet-stream' });
-    entry.url = URL.createObjectURL(safe);
-    const a = el('a', 'file-card');
-    a.href = entry.url;
-    a.download = meta.name;
+    // Saved through dlSave, which needs the sender's permission for others.
+    entry.blob = blob;
+    const a = el('button', 'file-card');
+    a.type = 'button';
+    a.onclick = (e) => { e.stopPropagation(); dlAction(entry); };
     const ic = el('span', 'file-ic');
     ic.append(icon('file'));
     const txt = el('div');
     txt.append(el('div', 'name', meta.name), el('div', 'size', `${fmtSize(meta.size)} · دانلود`));
     a.append(ic, txt);
+    entry.fileCard = a;
     entry.content.append(a);
+    if (entry.dir === 'out') entry.content.append(dlRow(entry, false));
+    renderDl(entry);
     entry.el.classList.remove('media');
     return;
   }
@@ -2478,7 +2498,8 @@ function finalizeMediaBody(entry, blob, meta) {
   wrap.append(media, veil);
   wrap.addEventListener('pointerdown', (e) => pressMedia(e, entry, kind));
   wrap.addEventListener('contextmenu', (e) => { e.preventDefault(); if (e.pointerType !== 'touch' && !TOUCH) openKeepSheet(entry); });
-  entry.content.append(wrap);
+  entry.content.append(wrap, dlRow(entry));
+  renderDl(entry);
 }
 
 // The sender uploads every chunk to the server alongside the live copy, so a
@@ -2691,6 +2712,379 @@ function openKeepSheet(entry) {
   $('keep-sheet').hidden = false;
 }
 function closeKeepSheet() { $('keep-sheet').hidden = true; }
+
+// ---------- download permissions ----------
+// Music can always be saved to the device. A photo, video or file can be saved
+// only once its sender allows it: the other side asks, only the sender's device
+// sees the request and only it can answer. Requests and answers are content
+// events like reactions, live and in the encrypted history. Like hold-to-view
+// this is a courtesy lock: the receiving device already holds the decrypted copy.
+const DL_LABEL = { image: 'عکس', video: 'ویدیو', file: 'فایل', audio: 'موزیک' };
+const DL_EXT = {
+  'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif',
+  'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov', 'video/ogg': 'ogv',
+  'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'audio/aac': 'aac', 'audio/ogg': 'ogg', 'audio/wav': 'wav', 'audio/flac': 'flac', 'audio/webm': 'weba',
+};
+const dlReqs = new Map();    // `${target}|${requester}` -> { target, req, op: 'req'|'ok'|'no', ts, eids }
+const dlFiles = new Map();   // message id -> its file event from the full log, for messages not on screen
+const pendingDl = new Map(); // message id -> events that arrived before their message (and so its sender)
+let dlScanAfter = 0;         // newest log entry the permissions sheet has read
+let dlScanning = false;
+let dlTab = 'in';
+const dlKey = (target, req) => `${target}|${req}`;
+
+// Targets whose "you may download" banner this device already acted on.
+let dlDone = null; // { room, set }
+function dlDoneSet() {
+  if (dlDone?.room !== room.id) {
+    let ids = [];
+    try { ids = JSON.parse(localStorage.getItem(`najva:dl-done:${room.id}`) || '[]'); } catch {}
+    dlDone = { room: room.id, set: new Set(Array.isArray(ids) ? ids : []) };
+  }
+  return dlDone.set;
+}
+function markDlDone(target, done = true) {
+  const s = dlDoneSet();
+  if (done) s.add(target); else s.delete(target);
+  try { localStorage.setItem(`najva:dl-done:${room.id}`, JSON.stringify([...s].slice(-500))); } catch {}
+}
+
+function dlOwner(target) {
+  const m = messages.get(target);
+  if (m) return m.dir === 'out' ? myDev : m.from;
+  return dlFiles.get(target)?.a || null;
+}
+const dlKindOf = (target) => messages.get(target)?.kind || dlFiles.get(target)?.kind || 'file';
+const dlNameOf = (target) => messages.get(target)?.meta?.name || dlFiles.get(target)?.name || '';
+const dlMine = (target) => dlReqs.get(dlKey(target, myDev));
+const dlAllowedId = (target) => dlOwner(target) === myDev || dlKindOf(target) === 'audio' || dlMine(target)?.op === 'ok';
+const dlAllowed = (entry) => dlAllowedId(entry.id);
+const dlAsksFor = (target) => [...dlReqs.values()].filter((r) => r.target === target && r.op === 'req');
+const dlToMe = () => [...dlReqs.values()].filter((r) => dlOwner(r.target) === myDev).sort((a, b) => b.ts - a.ts);
+const dlFromMe = () => [...dlReqs.values()].filter((r) => r.req === myDev && dlOwner(r.target)).sort((a, b) => b.ts - a.ts);
+const dlEids = (target) => [...dlReqs.values()].filter((r) => r.target === target).flatMap((r) => [...r.eids]);
+
+function applyDl(ev, live = false) {
+  if (typeof ev.id !== 'string' || !PID_RE.test(ev.target || '') || !['req', 'ok', 'no'].includes(ev.op)) return;
+  if (!PID_RE.test(ev.a || '') || !PID_RE.test(ev.to || '')) return;
+  const owner = dlOwner(ev.target);
+  if (!owner) {
+    const list = pendingDl.get(ev.target) || [];
+    if (list.length < 40) list.push(ev);
+    pendingDl.set(ev.target, list);
+    return;
+  }
+  // Anyone but the sender asks for themself; only the sender answers.
+  if (ev.op === 'req' ? ev.a !== ev.to || ev.a === owner : ev.a !== owner || ev.to === owner) return;
+  rememberName(ev.a, ev.an);
+  const key = dlKey(ev.target, ev.to);
+  let r = dlReqs.get(key);
+  if (r?.eids.has(ev.id)) return; // the live copy and the stored copy
+  if (!r) { r = { target: ev.target, req: ev.to, op: null, ts: 0, eids: new Set() }; dlReqs.set(key, r); }
+  r.eids.add(ev.id);
+  const ts = Number(ev.ts) || Date.now();
+  if (ts < r.ts) return; // an older event than what we show
+  r.op = ev.op;
+  r.ts = ts;
+  const m = messages.get(ev.target);
+  if (live) {
+    if (owner === myDev && r.op === 'req') { if (m) dlActivity(m, r); bumpUnread(); }
+    if (r.req === myDev && r.op !== 'req') {
+      markDlDone(r.target, r.op !== 'ok'); // a fresh permission gets its banner again
+      if (m) dlActivity(m, r);
+      bumpUnread();
+    }
+  }
+  if (m) renderDl(m);
+  refreshDl();
+}
+
+function dlDrain(target) {
+  const list = pendingDl.get(target);
+  if (!list) return;
+  pendingDl.delete(target);
+  for (const ev of list) applyDl(ev);
+}
+
+function dlForget(target) {
+  for (const [k, r] of dlReqs) if (r.target === target) dlReqs.delete(k);
+  dlFiles.delete(target);
+  pendingDl.delete(target);
+  refreshDl();
+}
+
+// The full log walk (permissions sheet, content manager) also learns who sent
+// each file, so requests for messages that are not on screen are listed too.
+function dlNoteLog(ev) {
+  if (!ev) return;
+  if (ev.k === 'dl') { applyDl(ev); return; }
+  if (ev.k !== 'file' || !validFileEvent(ev) || dlFiles.has(ev.id) || !PID_RE.test(ev.a || '')) return;
+  const mime = typeof ev.mime === 'string' ? ev.mime.slice(0, 100) : '';
+  const kind = ev.kind === 'gif' ? 'gif' : voiceFields(ev, mime) ? 'voice' : kindOf(mime);
+  dlFiles.set(ev.id, { id: ev.id, a: ev.a, kind, name: String(ev.name || 'file').slice(0, 200), mime, size: ev.size, total: ev.total, key: ev.key });
+  dlDrain(ev.id);
+}
+
+function dlSend(target, op, to) {
+  const ev = { k: 'dl', id: b64u(rand(12)), target, op, to, a: myDev, an: myName, ts: Date.now() };
+  applyDl(ev);
+  if (anySecure()) post(ev).catch(() => {});
+  storeEvent(ev).catch(() => toast('ذخیره‌ی درخواست روی سرور انجام نشد'));
+}
+
+function dlAnswer(r, op) {
+  dlSend(r.target, op, r.req);
+  const m = messages.get(r.target);
+  const k = 'dl:' + r.req;
+  if (m?.acts[k]) { removeAct(m.acts[k]); m.acts[k] = null; }
+  toast(op === 'ok' ? `اجازه‌ی دانلود به ${peerName(r.req)} داده شد` : `به ${peerName(r.req)} اجازه‌ی دانلود داده نشد`);
+}
+
+function dlAction(entry) {
+  if (dlAllowed(entry)) { dlSave(entry.id); return; }
+  if (dlMine(entry.id)?.op === 'req') { toast('درخواست فرستاده شده؛ منتظر اجازه‌ی فرستنده بمانید'); return; }
+  dlSend(entry.id, 'req', myDev);
+  toast('درخواست اجازه‌ی دانلود برای فرستنده فرستاده شد');
+}
+
+function dlFileName(name, mime, kind) {
+  let n = String(name || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim().slice(0, 150);
+  if (!n || n === 'file') n = `najva-${Date.now()}`;
+  const ext = DL_EXT[mime];
+  // Photos are re-encoded before sending, so the type decides the extension.
+  if (ext && kind !== 'file') n = n.replace(/\.[a-z0-9]{2,5}$/i, '') + '.' + ext;
+  return n;
+}
+
+function saveUrl(url, name) {
+  const a = el('a');
+  a.href = url;
+  a.download = name;
+  a.rel = 'noopener';
+  document.body.append(a);
+  a.click();
+  a.remove();
+}
+
+async function dlSave(target) {
+  if (!dlAllowedId(target)) return;
+  const m = messages.get(target);
+  const f = dlFiles.get(target);
+  const kind = dlKindOf(target);
+  const meta = m?.meta || f;
+  let blob = m?.blob || null;
+  if (!blob) {
+    const src = m ? m.remote : f && { meta: f, key: f.key };
+    if (!src) { toast('این مورد هنوز کامل دریافت نشده'); return; }
+    toast('در حال دریافت از سرور…');
+    blob = await fetchRemoteBlob(src.meta, src.key, () => true).catch(() => null);
+    if (!blob) { toast('دریافت از سرور انجام نشد'); return; }
+  }
+  const type = kind === 'file' ? 'application/octet-stream' : meta?.mime || blob.type;
+  const url = URL.createObjectURL(blob.type === type ? blob : new Blob([blob], { type }));
+  const name = dlFileName(meta?.name, meta?.mime, kind);
+  saveUrl(url, name);
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  toast(`«${name}» در دانلودهای دستگاه ذخیره می‌شود`);
+  if (dlOwner(target) !== myDev) { markDlDone(target); refreshDl(); }
+}
+
+async function saveKeptTrack(t) {
+  try {
+    const url = await loadKeptUrl(t.id, t.mime);
+    saveUrl(url, dlFileName(t.title, t.mime, 'audio'));
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch {
+    toast('خوانده نشد');
+  }
+}
+
+// The download / ask button under a photo or video, and for the sender a
+// button that answers the requests waiting on it.
+function dlRow(entry, main = true) {
+  const row = el('div', 'dl-row');
+  const mk = (cls, ic, fn) => {
+    const b = el('button', cls);
+    b.type = 'button';
+    b.append(icon(ic), el('span'));
+    b.addEventListener('pointerdown', (e) => e.stopPropagation());
+    b.onclick = (e) => { e.stopPropagation(); fn(); };
+    row.append(b);
+    return b;
+  };
+  if (main) entry.dlBtn = mk('dl-btn', 'download', () => dlAction(entry));
+  if (entry.dir === 'out') {
+    entry.dlGrant = mk('dl-btn grant', 'check', () => {
+      const asks = dlAsksFor(entry.id);
+      if (asks.length === 1) dlAnswer(asks[0], 'ok'); else openDl('in');
+    });
+    entry.dlGrant.hidden = true;
+  }
+  return row;
+}
+
+function renderDl(entry) {
+  const r = dlMine(entry.id);
+  const ok = dlAllowed(entry);
+  const label = ok ? 'دانلود' : r?.op === 'req' ? 'در انتظار اجازه‌ی فرستنده' : r?.op === 'no' ? 'اجازه داده نشد · دوباره بخواهید' : 'درخواست اجازه‌ی دانلود';
+  const size = entry.fileCard?.querySelector('.size');
+  if (size) size.textContent = `${fmtSize(entry.meta.size)} · ${label}`;
+  if (entry.dlBtn) {
+    entry.dlBtn.lastChild.textContent = label;
+    entry.dlBtn.classList.toggle('ok', ok);
+    entry.dlBtn.classList.toggle('wait', !ok && r?.op === 'req');
+  }
+  if (entry.dlGrant) {
+    const asks = dlAsksFor(entry.id);
+    entry.dlGrant.hidden = !asks.length;
+    if (asks.length) entry.dlGrant.lastChild.textContent = asks.length === 1 ? `اجازه‌ی دانلود به ${peerName(asks[0].req)}` : `اجازه‌ی دانلود به ${fa(asks.length)} نفر`;
+  }
+}
+
+// A request or an answer as an activity line, the way reactions show.
+function dlActivity(m, r) {
+  const k = 'dl:' + r.req;
+  if (m.acts[k]) removeAct(m.acts[k]);
+  m.acts[k] = null;
+  const what = DL_LABEL[m.kind] || 'مورد';
+  const ask = r.op === 'req';
+  const owner = peerName(dlOwner(r.target));
+  const a = el('div', 'act dl-act');
+  const mini = el('span', 'mini');
+  mini.append(icon('download'));
+  a.append(mini, document.createTextNode(ask ? `${peerName(r.req)} اجازه‌ی دانلود این ${what} را خواست`
+    : r.op === 'ok' ? `${owner} اجازه‌ی دانلود ${what} را داد` : `${owner} اجازه‌ی دانلود ${what} را نداد`));
+  if (m.kind === 'file' && m.meta?.name) a.append(el('span', 'snip', `«${m.meta.name}»`));
+  a.onclick = () => {
+    if (ask) { openDl('in'); return; }
+    focusMessage(m);
+    if (r.op === 'ok' && dlAllowed(m)) dlSave(m.id);
+  };
+  a.dataset.e = ask ? '⬇️' : r.op === 'ok' ? '✅' : '🚫';
+  a.dataset.dl = '1';
+  const run = currentRun();
+  run.querySelector('.act-items').append(a);
+  a.run = run;
+  m.acts[k] = a;
+  updateRun(run);
+  const list = $('messages');
+  if (list.scrollHeight - list.scrollTop - list.clientHeight < 160) list.scrollTop = list.scrollHeight;
+}
+
+// Badge in settings, the bar at the top, and the sheet if it is open.
+function refreshDl() {
+  if (!room.id) return;
+  const waiting = dlToMe().filter((r) => r.op === 'req');
+  const done = dlDoneSet();
+  const ready = dlFromMe().filter((r) => r.op === 'ok' && !done.has(r.target));
+  $('dl-badge').hidden = !waiting.length;
+  $('dl-badge').textContent = fa(waiting.length);
+  $('menu-btn').classList.toggle('has-dot', waiting.length > 0);
+  dlBanner(waiting, ready);
+  renderDlModal();
+}
+
+function dlBanner(waiting, ready) {
+  const b = $('banner');
+  if (!b.hidden && b.dataset.key !== 'dl') return; // a more important notice holds the bar
+  if (waiting.length === 1) {
+    const r = waiting[0];
+    banner(`${peerName(r.req)} اجازه‌ی دانلود یک ${DL_LABEL[dlKindOf(r.target)] || 'مورد'} را از شما خواسته است`, [
+      { label: 'اجازه دادن', fn: () => dlAnswer(r, 'ok') },
+      { label: 'رد', fn: () => dlAnswer(r, 'no') },
+      { label: 'دیدن', fn: () => { const m = messages.get(r.target); if (m) focusMessage(m); else openDl('in'); } },
+    ], 'dl', 'info');
+  } else if (waiting.length) {
+    banner(`${fa(waiting.length)} درخواست دانلود منتظر پاسخ شماست`, { label: 'دیدن درخواست‌ها', fn: () => openDl('in') }, 'dl', 'info');
+  } else if (ready.length === 1) {
+    const r = ready[0];
+    banner(`${peerName(dlOwner(r.target))} اجازه‌ی دانلود ${DL_LABEL[dlKindOf(r.target)] || 'مورد'} را به شما داد`, [
+      { label: 'دانلود', fn: () => dlSave(r.target) },
+      { label: 'بعداً', fn: () => { markDlDone(r.target); refreshDl(); } },
+    ], 'dl', 'info');
+  } else if (ready.length) {
+    banner(`اجازه‌ی دانلود ${fa(ready.length)} مورد به شما داده شد`, [
+      { label: 'دیدن', fn: () => openDl('out') },
+      { label: 'بعداً', fn: () => { for (const r of ready) markDlDone(r.target); refreshDl(); } },
+    ], 'dl', 'info');
+  } else {
+    clearBanner('dl');
+  }
+}
+
+function openDl(tab = dlTab) {
+  closePanels();
+  dlTab = tab;
+  $('dl-modal').hidden = false;
+  renderDlModal();
+  dlScan();
+}
+
+async function dlScan() {
+  if (dlScanning) return;
+  dlScanning = true;
+  renderDlModal();
+  let newest = dlScanAfter;
+  const ok = await fetchAllContent((batch) => { newest = Math.max(newest, batch[0].ts); }, dlScanAfter);
+  if (ok) dlScanAfter = newest;
+  dlScanning = false;
+  refreshDl();
+}
+
+function renderDlModal() {
+  if ($('dl-modal').hidden) return;
+  const toMe = dlToMe();
+  const fromMe = dlFromMe();
+  const waiting = toMe.filter((r) => r.op === 'req').length;
+  $('dl-tab-in').textContent = `از شما خواسته‌اند (${fa(toMe.length)})`;
+  $('dl-tab-out').textContent = `درخواست‌های شما (${fa(fromMe.length)})`;
+  $('dl-tab-in').classList.toggle('active', dlTab === 'in');
+  $('dl-tab-out').classList.toggle('active', dlTab === 'out');
+  $('dl-sub').textContent = dlScanning ? 'در حال خواندن تاریخچه از سرور…' : waiting ? `${fa(waiting)} درخواست منتظر پاسخ شماست` : 'همه‌ی درخواست‌های این گفتگو';
+  const rows = dlTab === 'in' ? toMe : fromMe;
+  const list = $('dl-list');
+  list.textContent = '';
+  $('dl-empty').hidden = rows.length > 0;
+  $('dl-empty').textContent = dlTab === 'in' ? 'کسی اجازه‌ی دانلود چیزی را از شما نخواسته است.' : 'شما اجازه‌ی دانلود چیزی را نخواسته‌اید.';
+  for (const r of rows) {
+    const kind = dlKindOf(r.target);
+    const name = dlNameOf(r.target);
+    const li = el('li', `dl-${r.op}`);
+    const ic = el('span', 'mg-ic');
+    ic.append(icon(MG_ICON[kind] || 'file'));
+    const info = el('div', 'mg-info');
+    const who = dlTab === 'in' ? peerName(r.req) : peerName(dlOwner(r.target));
+    const state = r.op === 'ok' ? 'اجازه داده شد' : r.op === 'no' ? 'اجازه داده نشد' : 'در انتظار پاسخ';
+    info.append(el('div', 'mg-title', kind === 'file' && name ? name : DL_LABEL[kind] || 'مورد'), el('div', 'mg-meta', `${who} · ${fmtSentAt(r.ts)} · ${state}`));
+    const acts = el('div', 'dl-acts');
+    const btn = (label, cls, fn) => {
+      const b = el('button', `btn btn-sm ${cls}`, label);
+      b.type = 'button';
+      b.onclick = (e) => { e.stopPropagation(); fn(); };
+      acts.append(b);
+    };
+    if (dlTab === 'in') {
+      if (r.op !== 'ok') btn('اجازه', '', () => dlAnswer(r, 'ok'));
+      if (r.op === 'req') btn('رد', 'btn-ghost', () => dlAnswer(r, 'no'));
+      if (r.op === 'ok') btn('لغو اجازه', 'btn-ghost', () => dlAnswer(r, 'no'));
+    } else {
+      if (r.op === 'ok') btn('دانلود', '', () => dlSave(r.target));
+      if (r.op === 'no') btn('درخواست دوباره', 'btn-ghost', () => { dlSend(r.target, 'req', myDev); toast('درخواست دوباره فرستاده شد'); });
+    }
+    li.append(ic, info, acts);
+    const m = messages.get(r.target);
+    if (m) li.onclick = () => { $('dl-modal').hidden = true; focusMessage(m); };
+    list.append(li);
+  }
+}
+
+function bindDl() {
+  const close = () => { $('dl-modal').hidden = true; };
+  $('dl-close').onclick = close;
+  $('dl-modal').addEventListener('click', (e) => { if (e.target === $('dl-modal')) close(); });
+  $('dl-tab-in').onclick = () => { dlTab = 'in'; renderDlModal(); };
+  $('dl-tab-out').onclick = () => { dlTab = 'out'; renderDlModal(); };
+}
 
 // ---------- screenshot deterrence ----------
 // Browsers cannot block screenshots. We hide content whenever the window is
@@ -3143,7 +3537,13 @@ async function renderLibrary() {
       if (player.cur?.key === 'l:' + t.id) stopPlayer();
       await removeKept(t.id);
     };
-    li.append(el('span', 'lib-num', fa(i + 1)), info, del);
+    const dl = el('button', 'btn-icon sm lib-dl');
+    dl.type = 'button';
+    dl.title = 'ذخیره روی گوشی';
+    dl.setAttribute('aria-label', 'ذخیره روی گوشی');
+    dl.append(icon('download'));
+    dl.onclick = (e) => { e.stopPropagation(); saveKeptTrack(t); };
+    li.append(el('span', 'lib-num', fa(i + 1)), info, dl, del);
     li.onclick = () => playLibrary(t.id);
     list.append(li);
   });
@@ -3323,7 +3723,7 @@ async function deleteForAll(ids) {
   if (!ids.length) return;
   const all = [...new Set(ids.flatMap((id) => {
     const m = messages.get(id);
-    return [id, ...(m?.editIds || []), ...noteList(m || {}).flatMap((n) => [...n.eids])]; // its edits, their files and notes too
+    return [id, ...(m?.editIds || []), ...noteList(m || {}).flatMap((n) => [...n.eids]), ...dlEids(id)]; // its edits, their files, notes and download requests too
   }))];
   const r = await storeFetch('/h/del', { method: 'POST', body: JSON.stringify({ ids: all }) }).catch(() => null);
   if (!r || !r.ok) { toast('حذف از سرور انجام نشد'); return false; }
@@ -3392,6 +3792,7 @@ function applyHistory(ev) {
   if (ev.k === 'edit') { applyEdit(ev); return; }
   if (ev.k === 'note') { applyNote(ev); return; }
   if (ev.k === 'seen') { applySeen(ev); return; }
+  if (ev.k === 'dl') { applyDl(ev); return; }
   if (messages.has(ev.id) || seen.has(ev.id)) return;
   if (ev.k === 'text') {
     if (typeof ev.body !== 'string') return;
@@ -3507,7 +3908,7 @@ async function loadHistory(initial, limit = 120) {
     const prevTop = list.scrollTop;
     insertAnchor = [...list.children].find((c) => c.id !== 'load-older') || null;
     try {
-      const later = (k) => k === 'react' || k === 'seen' || k === 'edit' || k === 'note'; // need their message first
+      const later = (k) => k === 'react' || k === 'seen' || k === 'edit' || k === 'note' || k === 'dl'; // need their message first
       for (const ev of events) if (!later(ev.k)) applyHistory(ev);
       for (const ev of events) if (later(ev.k)) applyHistory(ev);
       mergeIgSeam(insertAnchor);
@@ -3664,7 +4065,7 @@ async function fetchAllContent(onBatch, after = 0) {
     const before = items[items.length - 1].ts;
     pending = data.more && items.length === data.items.length ? fetchLogPage(before, after) : null;
     const decoded = await mapLimit(items, 48, openEvent);
-    for (const ev of decoded) mgNoteEdit(ev);
+    for (const ev of decoded) { mgNoteEdit(ev); dlNoteLog(ev); }
     const batch = decoded.filter((ev) => ev && (ev.k === 'text' || (ev.k === 'file' && validFileEvent(ev))));
     if (batch.length) onBatch?.(batch);
     if (!pending) return true;
@@ -5069,7 +5470,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-10-22.6';
+const APP_VERSION = '2026-11-03.1';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.
@@ -5385,22 +5786,29 @@ function notice(text, kind = '') {
   setTimeout(() => li.remove(), 20000);
 }
 
-function banner(text, action, key = '') {
+// `action` is one { label, fn } or a list of them. Kind 'info' is a calm bar
+// (download permissions) instead of the red warning.
+function banner(text, action, key = '', kind = '') {
   const b = $('banner');
   b.hidden = !text;
   b.textContent = '';
   b.dataset.key = text ? key : '';
+  b.classList.toggle('info', !!text && kind === 'info');
   if (!text) return;
   const body = el('div');
   body.append(el('div', '', text));
-  if (action) {
-    const btn = el('button', 'btn btn-sm btn-ghost', action.label);
-    btn.type = 'button';
-    btn.style.marginTop = '8px';
-    btn.onclick = action.fn;
-    body.append(btn);
+  const acts = [].concat(action || []);
+  if (acts.length) {
+    const row = el('div', 'banner-acts');
+    for (const a of acts) {
+      const btn = el('button', 'btn btn-sm btn-ghost', a.label);
+      btn.type = 'button';
+      btn.onclick = a.fn;
+      row.append(btn);
+    }
+    body.append(row);
   }
-  b.append(icon('alert'), body);
+  b.append(icon(kind === 'info' ? 'download' : 'alert'), body);
 }
 function clearBanner(key) {
   if ($('banner').dataset.key === key) banner('');
@@ -6228,6 +6636,7 @@ function bindUi() {
   applyVoiceFxUi();
   bindMusic();
   bindManager();
+  bindDl();
   bindRail();
   bindVeil();
   bindScheduler();
@@ -6341,6 +6750,7 @@ function bindUi() {
       ask('خروج از اتاق', 'از اتاق خارج می‌شوید. پیام‌ها رمزشده روی سرور می‌مانند و دفعه‌ی بعد با همین کد و رمز برمی‌گردند.', 'خروج', false).then((ok) => ok && leave());
     }
     if (act === 'manage') openManager();
+    if (act === 'downloads') openDl(dlToMe().some((r) => r.op === 'req') || !dlFromMe().length ? 'in' : 'out');
     if (act === 'notify') { e.stopPropagation(); toggleNotify(); }
     if (act === 'voicefx') {
       e.stopPropagation();

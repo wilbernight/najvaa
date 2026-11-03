@@ -11,8 +11,8 @@
 <title>نجوا</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preload" href="/fonts/Vazirmatn.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css?v=2026-10-22.6">
-<script type="module" src="/app.js?v=2026-10-22.6"></script>
+<link rel="stylesheet" href="/style.css?v=2026-11-03.1">
+<script type="module" src="/app.js?v=2026-11-03.1"></script>
 </head>
 <body>
 
@@ -196,6 +196,7 @@
       <button data-act="preview"><svg class="i"><use href="#i-insta"/></svg> <span id="preview-toggle">پیش‌نمایش اینستاگرام</span><span id="preview-switch" class="switch on"></span></button>
       <hr>
       <button data-act="manage"><svg class="i"><use href="#i-server"/></svg> مدیریت محتوا</button>
+      <button data-act="downloads"><svg class="i"><use href="#i-download"/></svg> <span>اجازه‌های دانلود</span><b id="dl-badge" class="menu-badge" hidden></b></button>
       <button data-act="veil"><svg class="i"><use href="#i-eye-off"/></svg> <span>متن محرمانه (ضد زوم)</span><span id="veil-switch" class="switch on"></span></button>
       <button data-act="notify"><svg class="i"><use href="#i-message"/></svg> <span>اعلان پیام جدید</span><span id="notify-switch" class="switch"></span></button>
       <button data-act="voicefx"><svg class="i"><use href="#i-sparkle"/></svg> <span>صدای ناشناس (تماس رباتیک، ویس با صدای هوش مصنوعی)</span><span id="voicefx-switch" class="switch"></span></button>
@@ -417,6 +418,22 @@
     <ol id="mg-list" class="mg-list"></ol>
     <p id="mg-empty" class="lib-empty" hidden>چیزی برای نمایش نیست.</p>
     <button id="mg-del" type="button" class="btn btn-danger wide" disabled><svg class="i"><use href="#i-trash"/></svg> حذف انتخاب‌شده‌ها برای همه</button>
+  </div>
+</div>
+
+<div id="dl-modal" class="modal" hidden>
+  <div class="modal-card manage-card" role="dialog" aria-modal="true" aria-label="اجازه‌های دانلود">
+    <div class="igm-head">
+      <div><div class="igm-kind">اجازه‌های دانلود</div><div id="dl-sub" class="igm-from"></div></div>
+      <button id="dl-close" type="button" class="btn-icon sm" aria-label="بستن"><svg class="i"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="seg" role="tablist">
+      <button id="dl-tab-in" type="button" class="active">از شما خواسته‌اند</button>
+      <button id="dl-tab-out" type="button">درخواست‌های شما</button>
+    </div>
+    <ol id="dl-list" class="mg-list dl-list"></ol>
+    <p id="dl-empty" class="lib-empty" hidden></p>
+    <p class="mg-note"><svg class="i"><use href="#i-download"/></svg> موزیک‌ها را همه می‌توانند روی دستگاه ذخیره کنند. عکس، ویدیو و فایل را فقط کسی که فرستاده اجازه‌ی دانلود می‌دهد و درخواست‌ها فقط به او نشان داده می‌شوند.</p>
   </div>
 </div>
 
