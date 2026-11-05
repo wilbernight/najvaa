@@ -127,6 +127,23 @@ server {
         try_files $uri =404;
     }
 
+    # HEIC photo decoder (libheif WASM). Versioned path, so cached for a year;
+    # fetched only by devices that cannot open HEIC themselves.
+    location ^~ /heic/ {
+        types {
+            application/wasm wasm;
+            text/javascript js;
+            text/plain txt;
+        }
+        gzip off;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Cross-Origin-Resource-Policy "same-origin" always;
+        add_header Cross-Origin-Embedder-Policy "require-corp" always;
+        try_files $uri =404;
+    }
+
     location / {
         try_files $uri $uri/ =404;
     }

@@ -1208,7 +1208,7 @@ function startEdit(entry) {
       pick.accept = 'image/*,video/*';
       pick.onchange = () => {
         const f = pick.files[0];
-        if (!f || !/^(image|video)\//.test(f.type)) return;
+        if (!f || !(/^(image|video)\//.test(f.type) || isHeic(f))) return;
         editFile = f;
         snip.textContent = `جایگزین: ${f.name}`;
       };
@@ -1261,10 +1261,10 @@ async function sendMediaEdit(entry) {
   if (file) {
     if (file.size > MAX_FILE) { toast(`حداکثر حجم فایل ${fa(100)} مگابایت است`); return; }
     blob = file;
-    if (file.type.startsWith('image/') && file.type !== 'image/gif') blob = (await stripImage(file)) || file;
+    if ((file.type.startsWith('image/') || isHeic(file)) && file.type !== 'image/gif') blob = (await stripImage(file)) || file;
     toast('در حال بارگذاری فایل جدید…');
     try {
-      ev.file = await uploadBlob(blob, file.name);
+      ev.file = await uploadBlob(blob, blob !== file && isHeic(file) ? file.name.replace(HEIC_EXT, '') + '.jpg' : file.name);
     } catch {
       toast('بارگذاری فایل جدید انجام نشد');
       return;
@@ -1376,7 +1376,8 @@ function applyMediaEdit(entry, ev, localBlob) {
   // Someone else's new photo: fetch it from the server (encrypted at rest).
   const meta = { id: file.id, total: file.total, size: file.size, mime: file.mime, kind: file.kind };
   fetchRemoteBlob(meta, file.key, () => messages.has(entry.id))
-    .then((blob) => { if (blob && messages.has(entry.id)) { v.blob = blob; showMediaVersion(entry); } })
+    .then((blob) => blob && viewableBlob(blob, meta))
+    .then((blob) => { if (blob && messages.has(entry.id)) { v.kind = meta.kind; v.blob = blob; showMediaVersion(entry); } })
     .catch(() => {});
 }
 
@@ -2196,27 +2197,90 @@ function chunkIv(i) {
   return iv;
 }
 function chunkAad(idBytes, i, total) { return concat(te.encode('wn1/file'), idBytes, u32(i), u32(total)); }
+// HEIC/HEIF (iPhone photos). Windows often gives these files no type at all.
+const HEIC_RE = /^image\/hei[cf](-sequence)?$/;
+const HEIC_EXT = /\.(heic|heif|hif)$/i;
+const isHeic = (file) => HEIC_RE.test(file.type) || (!file.type && HEIC_EXT.test(file.name || ''));
+
 function kindOf(mime) {
-  if (/^image\/(jpeg|png|gif|webp|avif)$/.test(mime)) return 'image';
+  if (/^image\/(jpeg|png|gif|webp|avif)$/.test(mime) || HEIC_RE.test(mime)) return 'image';
   if (/^video\/(mp4|webm|quicktime|ogg)$/.test(mime)) return 'video';
   if (AUDIO_RE.test(mime)) return 'audio';
   return 'file';
 }
 
+// Browsers other than Safari cannot open HEIC, so it is decoded on the device
+// by libheif (WASM, fetched from Najva's own server only when needed) and
+// turned into a JPEG. The result carries no EXIF, like stripImage's.
+let heicWorker = null;
+let heicSeq = 0;
+const heicJobs = new Map();
+function heicDecode(buf) {
+  if (!heicWorker) {
+    heicWorker = new Worker('/heic/v1/heic-worker.js');
+    heicWorker.onmessage = (e) => {
+      const done = heicJobs.get(e.data?.id);
+      if (done) { heicJobs.delete(e.data.id); done(e.data); }
+    };
+    heicWorker.onerror = () => {
+      for (const done of heicJobs.values()) done({ error: 'worker' });
+      heicJobs.clear();
+      heicWorker?.terminate();
+      heicWorker = null;
+    };
+  }
+  const id = ++heicSeq;
+  return new Promise((resolve) => {
+    heicJobs.set(id, resolve);
+    heicWorker.postMessage({ id, buf, quality: 0.9 }, [buf]);
+  });
+}
+
+async function canvasBlob(draw, width, height, type = 'image/jpeg') {
+  const c = document.createElement('canvas');
+  c.width = width;
+  c.height = height;
+  draw(c.getContext('2d'));
+  const out = await new Promise((r) => c.toBlob(r, type, 0.9));
+  c.width = c.height = 0;
+  return out || null;
+}
+
+async function heicToJpeg(blob) {
+  try {
+    const bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+    try { return await canvasBlob((g) => g.drawImage(bmp, 0, 0), bmp.width, bmp.height); } finally { bmp.close(); }
+  } catch {}
+  try {
+    const r = await heicDecode(await blob.arrayBuffer());
+    if (r.blob) return r.blob;
+    if (!r.pixels) return null;
+    return await canvasBlob((g) => g.putImageData(new ImageData(r.pixels, r.width, r.height), 0, 0), r.width, r.height);
+  } catch {
+    return null;
+  }
+}
+
+// A received HEIC photo (including ones sent before senders converted them)
+// is shown as a JPEG made on this device; if it cannot be decoded, it stays a
+// file card.
+async function viewableBlob(blob, meta) {
+  if (meta.kind !== 'image' || !HEIC_RE.test(meta.mime || blob.type)) return blob;
+  const jpg = await heicToJpeg(blob);
+  if (jpg) return jpg;
+  meta.kind = 'file';
+  return new Blob([blob], { type: 'application/octet-stream' });
+}
+
 // Re-encode photos to drop EXIF (GPS, device, time). GIFs keep their animation.
 async function stripImage(file) {
-  if (!/^image\/(jpeg|png|webp|heic|heif|avif)$/.test(file.type)) return file;
+  if (isHeic(file)) return heicToJpeg(file);
+  if (!/^image\/(jpeg|png|webp|avif)$/.test(file.type)) return file;
   try {
     const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
-    const c = document.createElement('canvas');
-    c.width = bmp.width;
-    c.height = bmp.height;
-    c.getContext('2d').drawImage(bmp, 0, 0);
-    bmp.close();
-    const type = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
-    const out = await new Promise((r) => c.toBlob(r, type, 0.9));
-    c.width = c.height = 0;
-    return out || null;
+    try {
+      return await canvasBlob((g) => g.drawImage(bmp, 0, 0), bmp.width, bmp.height, file.type === 'image/png' ? 'image/png' : 'image/jpeg');
+    } finally { bmp.close(); }
   } catch {
     return null;
   }
@@ -2299,18 +2363,21 @@ async function sendFile(file, gif = false, extra = null) {
 async function sendFileNow(file, gif = false, extra = null) {
   if (file.size > MAX_FILE) { toast(`حداکثر حجم فایل ${fa(100)} مگابایت است`); return; }
   let blob = file;
-  if (!gif && file.type.startsWith('image/')) {
+  let name = file.name || 'file';
+  if (!gif && (file.type.startsWith('image/') || isHeic(file))) {
     const clean = await stripImage(file);
-    if (clean) blob = clean;
-    else if (!(await ask('اطلاعات عکس حذف نشد', 'حذف اطلاعات مکان و دستگاه از این عکس ممکن نشد. همین‌طور ارسال شود؟', 'ارسال', false))) return;
+    if (clean) {
+      blob = clean;
+      if (isHeic(file)) name = name.replace(HEIC_EXT, '') + '.jpg';
+    } else if (!(await ask('اطلاعات عکس حذف نشد', 'حذف اطلاعات مکان و دستگاه از این عکس ممکن نشد. همین‌طور ارسال شود؟', 'ارسال', false))) return;
   }
-  const mime = blob.type || guessMime(file.name) || 'application/octet-stream';
+  const mime = blob.type || guessMime(name) || (isHeic(file) ? 'image/heic' : 'application/octet-stream');
   const kind = gif ? 'gif' : extra?.voice && AUDIO_RE.test(mime) && blob.size <= VOICE_MAX_BYTES ? 'voice' : kindOf(mime);
   const idBytes = rand(12);
   const id = b64u(idBytes);
   const key = rand(32);
   const total = Math.max(1, Math.ceil(blob.size / CHUNK));
-  const meta = { k: 'file', id, name: (file.name || 'file').slice(0, 200), mime, size: blob.size, total, key: b64u(key), ttl, kind, ts: Date.now(), a: myDev, an: myName };
+  const meta = { k: 'file', id, name: name.slice(0, 200), mime, size: blob.size, total, key: b64u(key), ttl, kind, ts: Date.now(), a: myDev, an: myName };
   if (kind === 'voice') {
     meta.dur = Math.max(0, Math.min(VOICE_MAX_S, Math.round(extra.dur || 0)));
     if (extra.wave) meta.wave = extra.wave;
@@ -2557,10 +2624,12 @@ async function onChunk(buf) {
   if (bar) bar.style.width = `${(inc.got / meta.total) * 100}%`;
   if (inc.got < meta.total) return;
   incoming.delete(meta.id);
-  const blob = new Blob(inc.parts, { type: meta.kind === 'file' ? 'application/octet-stream' : meta.mime });
+  let blob = new Blob(inc.parts, { type: meta.kind === 'file' ? 'application/octet-stream' : meta.mime });
   for (const p of inc.parts) wipe(p);
   inc.parts = null;
+  blob = await viewableBlob(blob, meta);
   if (!messages.has(meta.id)) return;
+  inc.entry.kind = meta.kind;
   finalizeMedia(inc.entry, blob, meta);
   inc.entry.ready = true;
   watchRead(inc.entry);
@@ -2880,9 +2949,11 @@ async function dlSave(target) {
     blob = await fetchRemoteBlob(src.meta, src.key, () => true).catch(() => null);
     if (!blob) { toast('دریافت از سرور انجام نشد'); return; }
   }
-  const type = kind === 'file' ? 'application/octet-stream' : meta?.mime || blob.type;
+  // A HEIC photo already shown here was turned into a JPEG on this device.
+  const mime = HEIC_RE.test(meta?.mime || '') && blob.type === 'image/jpeg' ? 'image/jpeg' : meta?.mime;
+  const type = kind === 'file' ? 'application/octet-stream' : mime || blob.type;
   const url = URL.createObjectURL(blob.type === type ? blob : new Blob([blob], { type }));
-  const name = dlFileName(meta?.name, meta?.mime, kind);
+  const name = dlFileName(meta?.name, mime, kind);
   saveUrl(url, name);
   setTimeout(() => URL.revokeObjectURL(url), 60000);
   toast(`«${name}» در دانلودهای دستگاه ذخیره می‌شود`);
@@ -3867,8 +3938,11 @@ async function downloadRemote(entry) {
       const bar = entry.loading?.querySelector('.progress i');
       if (bar) bar.style.width = `${f * 100}%`;
     }, job);
-    if (!blob || !messages.has(meta.id)) return;
-    finalizeMedia(entry, blob, meta);
+    if (!blob) return;
+    const shown = await viewableBlob(blob, meta);
+    if (!messages.has(meta.id)) return;
+    entry.kind = meta.kind;
+    finalizeMedia(entry, shown, meta);
     entry.ready = true;
     if (entry.dir === 'in' && !entry.readSent) watchRead(entry);
   } catch {
@@ -5470,7 +5544,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-11-03.1';
+const APP_VERSION = '2026-11-05.1';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.
