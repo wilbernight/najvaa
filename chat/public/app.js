@@ -755,9 +755,13 @@ function sentAt(t) {
 }
 function fmtSentAt(t) {
   const d = new Date(t);
-  const time = d.toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' });
-  if (d.toDateString() === new Date().toDateString()) return time;
-  return `${d.toLocaleDateString('fa-IR', { day: 'numeric', month: 'long' })} ${time}`;
+  const time = d.toLocaleTimeString('fa-IR', { timeZone: TEHRAN_TZ, hour: '2-digit', minute: '2-digit' });
+  if (tehranDayKey(t) === tehranDayKey(Date.now())) return time;
+  return `${d.toLocaleDateString('fa-IR', { timeZone: TEHRAN_TZ, day: 'numeric', month: 'long' })} ${time}`;
+}
+function tehranDayKey(t) {
+  const p = tehranParts(t);
+  return `${p.y}-${p.m}-${p.d}`;
 }
 
 function createEntry({ id, dir, ttl: life, kind, snippet, from, ts }) {
@@ -766,7 +770,7 @@ function createEntry({ id, dir, ttl: life, kind, snippet, from, ts }) {
   const meta = el('div', 'meta');
   const at = sentAt(ts);
   const time = el('span', 'time', fmtSentAt(at));
-  time.title = new Date(at).toLocaleString('fa-IR', { dateStyle: 'full', timeStyle: 'short' });
+  time.title = new Date(at).toLocaleString('fa-IR', { timeZone: TEHRAN_TZ, dateStyle: 'full', timeStyle: 'short' });
   const timer = el('span', 'timer');
   meta.append(timer, time);
   let tick = null;
@@ -964,6 +968,7 @@ function removeEntry(entry) {
   messages.delete(entry.id);
   unacked.delete(entry.id);
   readObserver.unobserve(entry.el);
+  legacyYtObserver.unobserve(entry.el);
   visibleUnread.delete(entry);
   for (const a of Object.values(entry.acts)) if (a) removeAct(a);
   dlForget(entry.id);
@@ -1443,7 +1448,7 @@ function tagEdited(entry, ts) {
     tag = el('span', 'edited', 'ویرایش‌شده');
     entry.el.querySelector('.meta .time')?.before(tag);
   }
-  tag.title = new Date(ts).toLocaleString('fa-IR', { dateStyle: 'medium', timeStyle: 'short' });
+  tag.title = new Date(ts).toLocaleString('fa-IR', { timeZone: TEHRAN_TZ, dateStyle: 'medium', timeStyle: 'short' });
 }
 
 function renderEdited(entry) {
@@ -1463,7 +1468,7 @@ function renderEdited(entry) {
     tag = el('span', 'edited', 'ویرایش‌شده');
     entry.el.querySelector('.meta .time')?.before(tag);
   }
-  tag.title = new Date(entry.versions[entry.versions.length - 1].ts).toLocaleString('fa-IR', { dateStyle: 'medium', timeStyle: 'short' });
+  tag.title = new Date(entry.versions[entry.versions.length - 1].ts).toLocaleString('fa-IR', { timeZone: TEHRAN_TZ, dateStyle: 'medium', timeStyle: 'short' });
 }
 
 function sanitizeReply(r) {
@@ -1512,9 +1517,74 @@ function renderText(msg, dir) {
     entry.content.append(el('div', 'body big', body));
   } else {
     entry.content.append(el('div', 'body', body));
+    // Links sent before YouTube previews existed: build the card when the
+    // message actually scrolls into view, not for the whole history at once.
+    const oldYt = YT_LINK_RE.exec(body)?.[0];
+    if (oldYt) observeLegacyYt(entry, oldYt);
   }
   if (dir === 'in') watchRead(entry);
   return entry;
+}
+
+// ---------- previews for old YouTube links ----------
+// History is encrypted end to end, so the server cannot add previews to links
+// sent before this feature. The client builds them lazily, in view, and keeps
+// the result only for the life of the tab. The relay still fetches the page and
+// thumbnail; the recipient's device never contacts YouTube.
+const legacyYtCache = new Map(); // url -> preview (bounded, memory only)
+let legacyYtChain = Promise.resolve();
+
+const legacyYtObserver = new IntersectionObserver((list) => {
+  for (const e of list) {
+    if (!e.isIntersecting) continue;
+    legacyYtObserver.unobserve(e.target);
+    const entry = e.target._entry;
+    if (entry?.legacyYtLink && !entry.preview && messages.has(entry.id)) queueLegacyYt(entry, entry.legacyYtLink);
+  }
+}, { rootMargin: '350px' });
+
+function observeLegacyYt(entry, link) {
+  entry.legacyYtLink = link;
+  legacyYtObserver.observe(entry.el);
+}
+
+function queueLegacyYt(entry, link) {
+  legacyYtChain = legacyYtChain.then(() => hydrateLegacyYt(entry, link)).catch(() => {});
+}
+
+async function hydrateLegacyYt(entry, link) {
+  if (!previewsOn || !messages.has(entry.id) || entry.preview) return;
+  let preview = legacyYtCache.get(link);
+  if (!preview) {
+    preview = await fetchPreview(link);
+    if (!preview) preview = canonicalYt(link);
+    if (!preview) return;
+    legacyYtCache.set(link, preview);
+    if (legacyYtCache.size > 100) legacyYtCache.delete(legacyYtCache.keys().next().value);
+  }
+  if (!messages.has(entry.id) || entry.preview) return;
+  applyLegacyYtPreview(entry, preview);
+}
+
+function applyLegacyYtPreview(entry, preview) {
+  if (!preview || entry.preview || !messages.has(entry.id)) return;
+  entry.preview = preview;
+  entry.kind = 'ig';
+  entry.el.classList.add('media');
+  const bodyEl = entry.content.querySelector(':scope > .body');
+  const card = igCard(preview);
+  if (bodyEl) entry.content.insertBefore(card, bodyEl); else entry.content.append(card);
+  if (bodyEl) {
+    const rest = entry.body.replace(YT_LINK_RE, '').trim();
+    if (rest) bodyEl.textContent = rest; else bodyEl.remove();
+  }
+  entry.legacyYtLink = null;
+  legacyYtObserver.unobserve(entry.el);
+  scheduleChatRow();
+}
+
+function resumeLegacyYt() {
+  for (const m of messages.values()) if (m.legacyYtLink && !m.preview) legacyYtObserver.observe(m.el);
 }
 
 // ---------- instagram stacks ----------
@@ -4233,7 +4303,7 @@ const MG_FOLD = (s) => foldDigits(String(s).toLowerCase()).replace(/[\u200c\u200
 
 const mgTitle = (ev, kind) => kind === 'text' ? (mgEdits.get(ev.id)?.body ?? ev.body) : kind === 'ig' ? (ev.preview?.title || 'پست اینستاگرام') : kind === 'yt' ? (ev.preview?.title || 'ویدیوی یوتیوب') : String(ev.name || MG_LABEL[kind]);
 const mgWho = (ev) => (ev.a === myDev ? 'شما' : (knownNames.get(ev.a) || ev.an || 'مخاطب'));
-const mgWhen = (ev) => new Date(ev.ts).toLocaleString('fa-IR', { dateStyle: 'medium', timeStyle: 'short' });
+const mgWhen = (ev) => new Date(ev.ts).toLocaleString('fa-IR', { timeZone: TEHRAN_TZ, dateStyle: 'medium', timeStyle: 'short' });
 function mgSearchText(ev) {
   const edited = mgEdits.get(ev.id)?.body;
   if (ev._mgqEdited !== edited) { ev._mgqEdited = edited; ev._mgq = undefined; }
@@ -4508,10 +4578,36 @@ function jalaliMonthDays(jy, jm) {
   const back = toJalali(gy, gm, gd);
   return back[1] === 12 && back[2] === 30 ? 30 : 29;
 }
+// Scheduled messages are Tehran wall-clock time, whatever timezone the device
+// or the relay happens to be in. `Intl` gives the Tehran calendar day and hour
+// for an instant; the offset turns a picked Tehran date/time back into an
+// epoch. (Iran has no DST since 2022; the lookup still handles any edge.)
+const TEHRAN_TZ = 'Asia/Tehran';
+const tehranFmt = new Intl.DateTimeFormat('en-US', {
+  timeZone: TEHRAN_TZ, hourCycle: 'h23',
+  year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', second: '2-digit',
+});
+function tehranParts(ms = Date.now()) {
+  const p = {};
+  for (const { type, value } of tehranFmt.formatToParts(new Date(ms))) if (type !== 'literal') p[type] = Number(value);
+  return { y: p.year, m: p.month, d: p.day, h: p.hour, min: p.minute, s: p.second };
+}
+function tehranOffset(ms) {
+  const p = tehranParts(ms);
+  return Date.UTC(p.y, p.m - 1, p.d, p.h, p.min, p.s) - (ms - (ms % 1000));
+}
+function tehranEpoch(y, m, d, h, min) {
+  const wall = Date.UTC(y, m - 1, d, h, min, 0);
+  let off = tehranOffset(wall);
+  const settled = tehranOffset(wall - off);
+  if (Number.isFinite(settled)) off = settled;
+  return wall - off;
+}
 function fmtJalali(ms) {
-  const d = new Date(ms);
-  const [jy, jm, jd] = toJalali(d.getFullYear(), d.getMonth() + 1, d.getDate());
-  return `${faNum(jd)} ${JALALI_MONTHS[jm - 1]} ${faNum(jy)}، ساعت ${faNum(d.getHours(), 2)}:${faNum(d.getMinutes(), 2)}`;
+  const t = tehranParts(ms);
+  const [jy, jm, jd] = toJalali(t.y, t.m, t.d);
+  return `${faNum(jd)} ${JALALI_MONTHS[jm - 1]} ${faNum(jy)}، ساعت ${faNum(t.h, 2)}:${faNum(t.min, 2)}`;
 }
 
 const schedKey = () => `najva:sched:${room.id}`;
@@ -4598,10 +4694,9 @@ async function openScheduler() {
   if (!room?.histKey) return;
   if (!$('sched-modal')) buildScheduler();
   closePanels();
-  // Start at the next whole hour, carrying over what was typed in the chat box.
-  const t = new Date(Date.now() + 3600000);
-  t.setMinutes(0, 0, 0);
-  const [jy, jm, jd] = toJalali(t.getFullYear(), t.getMonth() + 1, t.getDate());
+  // Start at the next whole hour, on the Tehran clock.
+  const t = tehranParts(Date.now() + 3600000);
+  const [jy, jm, jd] = toJalali(t.y, t.m, t.d);
   const year = $('sched-year');
   year.textContent = '';
   for (let y = jy; y <= jy + 1; y++) year.append(new Option(faNum(y), y));
@@ -4609,7 +4704,7 @@ async function openScheduler() {
   $('sched-month').value = String(jm);
   $('sched-month').onchange();
   $('sched-day').value = String(jd);
-  $('sched-hour').value = String(t.getHours());
+  $('sched-hour').value = String(t.h);
   $('sched-min').value = '0';
   const typed = $('input').value.trim();
   if (typed && !$('sched-text').value.trim()) $('sched-text').value = typed;
@@ -4652,7 +4747,7 @@ async function scheduleNow() {
   const body = $('sched-text').value.trim();
   if (!body) { toast('متن پیام را بنویسید'); return; }
   const [gy, gm, gd] = toGregorian(Number($('sched-year').value), Number($('sched-month').value), Number($('sched-day').value));
-  const at = new Date(gy, gm - 1, gd, Number($('sched-hour').value), Number($('sched-min').value)).getTime();
+  const at = tehranEpoch(gy, gm, gd, Number($('sched-hour').value), Number($('sched-min').value));
   if (at < Date.now() + 60000) { toast('زمان باید دست‌کم یک دقیقه بعد از الان باشد'); return; }
   if (at > Date.now() + 365 * 86400000) { toast('حداکثر تا یک سال بعد را می‌شود زمان‌بندی کرد'); return; }
   const go = $('sched-go');
@@ -5610,7 +5705,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-11-06.1';
+const APP_VERSION = '2026-11-06.2';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.
@@ -6027,9 +6122,9 @@ function updateChatRow() {
     snip.textContent = (last.dir === 'out' ? 'شما: ' : '') + what;
     snip.classList.remove('status');
     const d = new Date(last.ts);
-    $('row-time').textContent = d.toDateString() === new Date().toDateString()
-      ? d.toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })
-      : d.toLocaleDateString('fa-IR', { day: 'numeric', month: 'short' });
+    $('row-time').textContent = tehranDayKey(last.ts) === tehranDayKey(Date.now())
+      ? d.toLocaleTimeString('fa-IR', { timeZone: TEHRAN_TZ, hour: '2-digit', minute: '2-digit' })
+      : d.toLocaleDateString('fa-IR', { timeZone: TEHRAN_TZ, day: 'numeric', month: 'short' });
   } else {
     snip.textContent = $('status-text').textContent;
     snip.classList.add('status');
@@ -6872,6 +6967,7 @@ function bindUi() {
       e.stopPropagation();
       previewsOn = !previewsOn;
       $('preview-switch').classList.toggle('on', previewsOn);
+      if (previewsOn) resumeLegacyYt();
       toast(previewsOn ? 'پیش‌نمایش لینک اینستاگرام و یوتیوب روشن شد' : 'پیش‌نمایش خاموش شد؛ لینک‌ها هرگز به سرور فرستاده نمی‌شوند');
     }
     if (act === 'clear') {
