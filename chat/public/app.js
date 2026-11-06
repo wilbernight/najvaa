@@ -53,6 +53,9 @@ function isOneEmoji(e) {
 const IG_LINK_RE = /https?:\/\/(?:www\.)?(?:instagram\.com|instagr\.am)\/[^\s]+/i;
 const IG_PATH_RE = /\/(?:[A-Za-z0-9_.]+\/)?(p|reel|reels|tv)\/([A-Za-z0-9_-]{5,64})/;
 const IG_CANON_RE = /^https:\/\/www\.instagram\.com\/(p|reel|tv)\/[A-Za-z0-9_-]{5,64}\/$/;
+const YT_LINK_RE = /https?:\/\/(?:(?:www\.|m\.|music\.)?youtube\.com\/(?:watch\?[^\s]+|shorts\/[^\s]+|live\/[^\s]+|embed\/[^\s]+)|(?:www\.)?youtu\.be\/[^\s]+)/i;
+const YT_ID_RE = /(?:youtube\.com\/(?:watch\?(?:[^\s]*&)?v=|shorts\/|live\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/i;
+const YT_CANON_RE = /^https:\/\/www\.youtube\.com\/(?:watch\?v=|shorts\/)([A-Za-z0-9_-]{11})$/;
 
 // ---------- bytes ----------
 function b64u(bytes) {
@@ -817,7 +820,11 @@ function createEntry({ id, dir, ttl: life, kind, snippet, from, ts }) {
     setReaction(entry, entry.react.me === '❤️' ? null : '❤️');
   });
   entry.heart = () => setReaction(entry, entry.react.me === '❤️' ? null : '❤️');
-  li.addEventListener('contextmenu', (e) => { e.preventDefault(); if (!e.target.closest('.media-wrap')) openReactBar(entry); });
+  li.addEventListener('contextmenu', (e) => {
+    if (e.target.closest('.yt-card')) return; // native "open in Chrome / new tab"
+    e.preventDefault();
+    if (!e.target.closest('.media-wrap')) openReactBar(entry);
+  });
   bindLongPress(li, () => openReactBar(entry));
 
   const list = $('messages');
@@ -848,7 +855,7 @@ function updateToBottom() {
 function bindLongPress(target, fn) {
   let t = null;
   target.addEventListener('pointerdown', (e) => {
-    if (e.pointerType !== 'touch' || e.target.closest('.media-wrap')) return;
+    if (e.pointerType !== 'touch' || e.target.closest('.media-wrap, .yt-card')) return;
     t = setTimeout(() => { t = null; navigator.vibrate?.(10); fn(); }, 450);
   });
   const cancel = () => { clearTimeout(t); t = null; };
@@ -1138,7 +1145,7 @@ function isEmojiOnly(s) {
 let replyTo = null;
 
 function quoteOf(entry) {
-  const what = {
+  const what = isYtPreview(entry.preview) ? `ویدیوی یوتیوب${entry.preview.title ? ` «${entry.preview.title}»` : ''}` : {
     ig: 'پست اینستاگرام', image: 'عکس', gif: 'گیف', video: 'ویدیو',
     audio: `موزیک «${entry.title || ''}»`, file: `فایل «${entry.snippet || ''}»`,
     voice: `پیام صوتی (${fmtDuration(entry.voiceDur || 0)})`,
@@ -1488,15 +1495,18 @@ function renderText(msg, dir) {
   const body = msg.body;
   if (msg.reply) { entry.quote = msg.reply; entry.content.append(quoteBlock(msg.reply)); } // entry.reply holds reaction replies
   if (msg.preview) {
+    const yt = isYtPreview(msg.preview);
     entry.el.classList.add('media');
     const card = igCard(msg.preview);
-    card.onclick = (e) => { e.preventDefault(); openIgModal([entry], 0); };
-    entry.igTitleEl = card.querySelector('.ig-title');
+    if (!yt) {
+      card.onclick = (e) => { e.preventDefault(); openIgModal([entry], 0); };
+      entry.igTitleEl = card.querySelector('.ig-title');
+    }
     entry.content.append(card);
-    entry.note = body.replace(IG_LINK_RE, '').trim();
+    entry.note = body.replace(IG_LINK_RE, '').replace(YT_LINK_RE, '').trim();
     if (entry.note) entry.content.append(el('div', 'body', entry.note));
-    if (placeIgEntry(entry, prev)) return entry;
-    entry.el._igEntry = entry;
+    if (!yt && placeIgEntry(entry, prev)) return entry;
+    if (!yt) entry.el._igEntry = entry;
   } else if (isEmojiOnly(body)) {
     entry.el.classList.add('big-emoji');
     entry.content.append(el('div', 'body big', body));
@@ -1770,8 +1780,25 @@ function igStep(d) {
   renderIgModal();
 }
 
+const isYtPreview = (p) => p?.site === 'yt' || (typeof p?.url === 'string' && YT_CANON_RE.test(p.url));
+const ytKindLabel = (kind) => ({ shorts: 'شورت', live: 'پخش زنده', video: 'ویدیو' }[kind] || 'ویدیو');
+
+function compactFa(n) {
+  if (n >= 1e9) return `${fa((n / 1e9).toFixed(1).replace(/\.0$/, ''))} میلیارد`;
+  if (n >= 1e6) return `${fa((n / 1e6).toFixed(1).replace(/\.0$/, ''))} میلیون`;
+  if (n >= 1e3) return `${fa((n / 1e3).toFixed(1).replace(/\.0$/, ''))} هزار`;
+  return fa(n);
+}
+
+function ytBadge() {
+  const b = el('span', 'yt-badge');
+  b.append(icon('play'));
+  return b;
+}
+
 function igCard(p) {
-  const a = el('a', 'ig-card');
+  const yt = isYtPreview(p);
+  const a = el('a', yt ? 'ig-card yt-card' : 'ig-card');
   a.href = p.url;
   a.target = '_blank';
   a.rel = 'noopener noreferrer';
@@ -1783,25 +1810,49 @@ function igCard(p) {
     img.draggable = false;
     thumb.append(img);
   } else {
-    thumb.append(icon('insta'));
+    thumb.append(icon(yt ? 'video' : 'insta'));
   }
-  if (p.kind === 'reel' || p.kind === 'tv') {
+  if (yt || p.kind === 'reel' || p.kind === 'tv') {
     const play = el('span', 'ig-play');
     play.append(icon('play'));
     thumb.append(play);
   }
+  if (yt && p.duration > 0) thumb.append(el('span', 'yt-dur', fmtDuration(p.duration)));
   const info = el('div', 'ig-info');
-  const brand = el('div', 'ig-brand');
-  brand.append(icon('insta'), document.createTextNode(`Instagram · ${{ reel: 'ریلز', tv: 'ویدیو', p: 'پست' }[p.kind] || 'پست'}`));
-  info.append(brand, el('div', 'ig-title', p.title || 'مشاهده در اینستاگرام'));
+  const brand = el('div', yt ? 'ig-brand yt-brand' : 'ig-brand');
+  if (yt) {
+    brand.append(ytBadge(), document.createTextNode(`YouTube · ${ytKindLabel(p.kind)}`));
+    info.append(brand, el('div', 'ig-title', p.title || 'مشاهده در یوتیوب'));
+    if (p.author) info.append(el('div', 'yt-author', p.author));
+    if (p.views > 0) info.append(el('div', 'yt-meta', `${compactFa(p.views)} بازدید`));
+  } else {
+    brand.append(icon('insta'), document.createTextNode(`Instagram · ${{ reel: 'ریلز', tv: 'ویدیو', p: 'پست' }[p.kind] || 'پست'}`));
+    info.append(brand, el('div', 'ig-title', p.title || 'مشاهده در اینستاگرام'));
+  }
   a.append(thumb, info);
   return a;
 }
 
 function sanitizePreview(p) {
-  if (!p || typeof p !== 'object' || typeof p.url !== 'string' || !IG_CANON_RE.test(p.url)) return null;
+  if (!p || typeof p !== 'object') return null;
   const img = typeof p.img === 'string' && p.img.startsWith('data:image/jpeg;base64,') && p.img.length < 400000 ? p.img : null;
+  if (isYtPreview(p)) {
+    if (typeof p.url !== 'string' || !YT_CANON_RE.test(p.url)) return null;
+    return {
+      site: 'yt',
+      url: p.url,
+      kind: ['video', 'shorts', 'live'].includes(p.kind) ? p.kind : 'video',
+      title: typeof p.title === 'string' ? p.title.slice(0, 300) : '',
+      author: typeof p.author === 'string' ? p.author.slice(0, 100) : '',
+      duration: Number.isFinite(p.duration) ? Math.max(0, Math.min(86400, Math.floor(p.duration))) : 0,
+      views: Number.isFinite(p.views) ? Math.max(0, Math.min(1e12, Math.floor(p.views))) : 0,
+      live: p.live === true,
+      img,
+    };
+  }
+  if (typeof p.url !== 'string' || !IG_CANON_RE.test(p.url)) return null;
   return {
+    site: 'ig',
     url: p.url,
     kind: ['p', 'reel', 'tv'].includes(p.kind) ? p.kind : 'p',
     title: typeof p.title === 'string' ? p.title.slice(0, 300) : '',
@@ -1813,7 +1864,15 @@ function canonicalIg(link) {
   const m = IG_PATH_RE.exec(link);
   if (!m) return null;
   const kind = m[1] === 'reels' ? 'reel' : m[1];
-  return { url: `https://www.instagram.com/${kind}/${m[2]}/`, kind, title: '', img: null };
+  return { site: 'ig', url: `https://www.instagram.com/${kind}/${m[2]}/`, kind, title: '', img: null };
+}
+
+function canonicalYt(link) {
+  const m = YT_ID_RE.exec(link);
+  if (!m) return null;
+  const kind = /youtube\.com\/shorts\//i.test(link) ? 'shorts' : /youtube\.com\/live\//i.test(link) ? 'live' : 'video';
+  const url = kind === 'shorts' ? `https://www.youtube.com/shorts/${m[1]}` : `https://www.youtube.com/watch?v=${m[1]}`;
+  return { site: 'yt', url, kind, title: '', author: '', duration: 0, views: 0, live: kind === 'live', img: null };
 }
 
 async function fetchPreview(link) {
@@ -1829,7 +1888,10 @@ async function fetchPreview(link) {
     if (!r.ok) return null;
     const j = await r.json();
     const img = j.image ? await shrinkImage(j.image, 520, 0.72) : null;
-    return sanitizePreview({ url: j.url, kind: j.kind, title: j.title, img });
+    return sanitizePreview({
+      site: j.site, url: j.url, kind: j.kind, title: j.title,
+      author: j.author, duration: j.duration, views: j.views, live: j.live, img,
+    });
   } catch {
     return null;
   }
@@ -1903,14 +1965,17 @@ async function sendText() {
   closePanels();
   if (SONG_LINK_RE.test(body) && (await sendSongLink(body))) return;
   let preview = null;
-  const link = IG_LINK_RE.exec(body)?.[0];
+  const igLink = IG_LINK_RE.exec(body);
+  const ytLink = YT_LINK_RE.exec(body);
+  const link = [igLink, ytLink].filter(Boolean).sort((a, b) => a.index - b.index)[0];
   if (link) {
+    const yt = ytLink && link === ytLink;
     if (previewsOn) {
-      hint('در حال آماده‌سازی پیش‌نمایش اینستاگرام…');
-      preview = await fetchPreview(link);
+      hint(yt ? 'در حال آماده‌سازی پیش‌نمایش یوتیوب…' : 'در حال آماده‌سازی پیش‌نمایش اینستاگرام…');
+      preview = await fetchPreview(link[0]);
       hint('');
     }
-    preview = preview || canonicalIg(link);
+    preview = preview || (yt ? canonicalYt(link[0]) : canonicalIg(link[0]));
   }
   const msg = { k: 'text', id: b64u(rand(9)), body, ttl, ts: Date.now(), preview, a: myDev, an: myName };
   if (replyTo) { msg.reply = replyTo; clearReply(); }
@@ -2122,7 +2187,7 @@ function activity(actor, entry, noteText = null) {
     img.alt = '';
     a.append(img);
   } else {
-    mini.append(icon({ image: 'image', gif: 'image', video: 'video', audio: 'music', voice: 'mic', file: 'file', ig: 'insta' }[entry.kind] || 'smile'));
+    mini.append(icon(isYtPreview(entry.preview) ? 'play' : { image: 'image', gif: 'image', video: 'video', audio: 'music', voice: 'mic', file: 'file', ig: 'insta' }[entry.kind] || 'smile'));
     a.append(mini);
   }
   const who = actor === 'me' ? 'شما' : peerName(actor);
@@ -2132,7 +2197,7 @@ function activity(actor, entry, noteText = null) {
   else if (!entry.preview && entry.kind === 'text') a.append(el('span', 'snip', `«${entry.snippet}»`));
   a.onclick = () => focusMessage(entry);
   a.dataset.e = e || '💬';
-  a.dataset.ig = entry.preview ? '1' : '';
+  a.dataset.ig = entry.preview ? (isYtPreview(entry.preview) ? 'yt' : '1') : '';
   const run = currentRun();
   run.querySelector('.act-items').append(a);
   a.run = run;
@@ -2165,9 +2230,10 @@ function updateRun(run) {
   s.textContent = '';
   const stack = el('span', 'stack');
   for (const e of [...new Set(items.map((i) => i.dataset.e))].slice(0, 4)) stack.append(el('span', '', e));
-  const allIg = items.every((i) => i.dataset.ig);
+  const allIg = items.every((i) => i.dataset.ig === '1');
+  const allYt = items.every((i) => i.dataset.ig === 'yt');
   const allDl = items.every((i) => i.dataset.dl);
-  s.append(stack, document.createTextNode(allDl ? `${fa(items.length)} درخواست و اجازه‌ی دانلود` : `${fa(items.length)} واکنش${allIg ? ' به پست‌های اینستاگرام' : ''}`), icon('arrow', 'chev'));
+  s.append(stack, document.createTextNode(allDl ? `${fa(items.length)} درخواست و اجازه‌ی دانلود` : `${fa(items.length)} واکنش${allIg ? ' به پست‌های اینستاگرام' : allYt ? ' به ویدیوهای یوتیوب' : ''}`), icon('arrow', 'chev'));
   s.lastChild.style.transform = run.classList.contains('open') ? 'rotate(90deg)' : 'rotate(-90deg)';
 }
 
@@ -2183,7 +2249,7 @@ function focusMessage(entry) {
     openIgModal(entry.stack.members, entry.stack.members.indexOf(entry), entry.stack);
     return;
   }
-  if (entry.preview) { openIgModal([entry], 0); return; }
+  if (entry.preview && !isYtPreview(entry.preview)) { openIgModal([entry], 0); return; }
   entry.el.scrollIntoView({ block: 'center', behavior: 'smooth' });
   entry.el.classList.remove('flash');
   void entry.el.offsetWidth;
@@ -4039,9 +4105,9 @@ function mgForget(ids) {
 }
 const MG_RENDER = 200; // rows painted at a time; older ones sit behind "show older"
 const mgSelected = new Set();
-const MG_KIND = (ev) => (ev.k === 'text' ? (ev.preview ? 'ig' : 'text') : ev.kind === 'gif' ? 'image' : ev.kind === 'voice' && AUDIO_RE.test(ev.mime || '') ? 'voice' : kindOf(ev.mime || ''));
-const MG_LABEL = { text: 'متن', ig: 'اینستاگرام', image: 'عکس', video: 'ویدیو', audio: 'موزیک', voice: 'ویس', file: 'فایل' };
-const MG_ICON = { text: 'message', ig: 'insta', image: 'image', video: 'video', audio: 'music', voice: 'mic', file: 'file' };
+const MG_KIND = (ev) => (ev.k === 'text' ? (ev.preview ? (isYtPreview(ev.preview) ? 'yt' : 'ig') : 'text') : ev.kind === 'gif' ? 'image' : ev.kind === 'voice' && AUDIO_RE.test(ev.mime || '') ? 'voice' : kindOf(ev.mime || ''));
+const MG_LABEL = { text: 'متن', ig: 'اینستاگرام', yt: 'یوتیوب', image: 'عکس', video: 'ویدیو', audio: 'موزیک', voice: 'ویس', file: 'فایل' };
+const MG_ICON = { text: 'message', ig: 'insta', yt: 'play', image: 'image', video: 'video', audio: 'music', voice: 'mic', file: 'file' };
 
 async function openManager(query = '') {
   closePanels();
@@ -4165,7 +4231,7 @@ function renderUsage(u) {
 const foldDigits = (s) => s.replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/[٠-٩]/g, (d) => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
 const MG_FOLD = (s) => foldDigits(String(s).toLowerCase()).replace(/[\u200c\u200d]/g, '').replace(/[يى]/g, 'ی').replace(/ك/g, 'ک');
 
-const mgTitle = (ev, kind) => kind === 'text' ? (mgEdits.get(ev.id)?.body ?? ev.body) : kind === 'ig' ? (ev.preview?.title || 'پست اینستاگرام') : String(ev.name || MG_LABEL[kind]);
+const mgTitle = (ev, kind) => kind === 'text' ? (mgEdits.get(ev.id)?.body ?? ev.body) : kind === 'ig' ? (ev.preview?.title || 'پست اینستاگرام') : kind === 'yt' ? (ev.preview?.title || 'ویدیوی یوتیوب') : String(ev.name || MG_LABEL[kind]);
 const mgWho = (ev) => (ev.a === myDev ? 'شما' : (knownNames.get(ev.a) || ev.an || 'مخاطب'));
 const mgWhen = (ev) => new Date(ev.ts).toLocaleString('fa-IR', { dateStyle: 'medium', timeStyle: 'short' });
 function mgSearchText(ev) {
@@ -5544,7 +5610,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-11-05.1';
+const APP_VERSION = '2026-11-06.1';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.
@@ -5957,7 +6023,7 @@ function updateChatRow() {
   for (const m of messages.values()) if (!last || m.ts >= last.ts) last = m;
   const snip = $('row-snip');
   if (last) {
-    const what = last.kind === 'text' ? last.snippet : ROW_KIND[last.kind] || 'پیام';
+    const what = last.kind === 'text' ? last.snippet : isYtPreview(last.preview) ? 'ویدیوی یوتیوب' : ROW_KIND[last.kind] || 'پیام';
     snip.textContent = (last.dir === 'out' ? 'شما: ' : '') + what;
     snip.classList.remove('status');
     const d = new Date(last.ts);
@@ -6806,7 +6872,7 @@ function bindUi() {
       e.stopPropagation();
       previewsOn = !previewsOn;
       $('preview-switch').classList.toggle('on', previewsOn);
-      toast(previewsOn ? 'پیش‌نمایش لینک اینستاگرام روشن شد' : 'پیش‌نمایش خاموش شد؛ لینک‌ها هرگز به سرور فرستاده نمی‌شوند');
+      toast(previewsOn ? 'پیش‌نمایش لینک اینستاگرام و یوتیوب روشن شد' : 'پیش‌نمایش خاموش شد؛ لینک‌ها هرگز به سرور فرستاده نمی‌شوند');
     }
     if (act === 'clear') {
       ask('پاک کردن گفتگو برای همه', 'با این کار تمام پیام‌ها و فایل‌های این گفتگو از سرور و از همه‌ی دستگاه‌ها پاک می‌شود! مطمئنید؟\nموارد «ماندگار» در کتابخانه‌ی هر دستگاه باقی می‌مانند.', 'بله، پاک کن').then(async (ok) => {

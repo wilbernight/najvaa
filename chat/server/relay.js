@@ -82,6 +82,15 @@ const PAGE_HOSTS = new Set(['instagram.com', 'www.instagram.com', 'instagr.am', 
 const IMG_HOST_RE = /(^|\.)(cdninstagram\.com|fbcdn\.net)$/i;
 const IG_PATH_RE = /^\/(?:[A-Za-z0-9_.]+\/)?(p|reel|reels|tv)\/([A-Za-z0-9_-]{5,64})/;
 const SHARE_PATH_RE = /^\/share\/(?:p|reel|reels|v)?\/?[A-Za-z0-9_-]{5,64}/;
+// YouTube: same rule as Instagram. The relay reads the public page/oEmbed and
+// sends the title, channel and thumbnail to the sender, who shrinks the picture
+// and sends it end-to-end encrypted; the recipient never contacts YouTube.
+const YT_PAGE_HOSTS = new Set([
+  'youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com',
+  'youtu.be', 'www.youtu.be', 'youtube-nocookie.com', 'www.youtube-nocookie.com',
+]);
+const YT_IMG_HOST_RE = /^(i|img)\.ytimg\.com$/i;
+const YT_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 const UA = 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)';
 let previewBudget = 240;
 setInterval(() => { previewBudget = 240; }, 60000);
@@ -143,8 +152,72 @@ function metaTags(html) {
   return out;
 }
 
+function youtubeId(start) {
+  if (!YT_PAGE_HOSTS.has(start.hostname)) return null;
+  let id = '';
+  if (start.hostname === 'youtu.be' || start.hostname === 'www.youtu.be') id = start.pathname.split('/')[1] || '';
+  else if (start.pathname === '/watch') id = start.searchParams.get('v') || '';
+  else {
+    const m = /^\/(?:shorts|live|embed)\/([A-Za-z0-9_-]{11})(?:[/?#]|$)/.exec(start.pathname);
+    if (m) id = m[1];
+  }
+  return YT_ID_RE.test(id) ? id : null;
+}
+
+async function buildYouTubePreview(start, id) {
+  const kind = start.pathname.startsWith('/shorts/') ? 'shorts' : start.pathname.startsWith('/live/') ? 'live' : 'video';
+  const url = kind === 'shorts' ? `https://www.youtube.com/shorts/${id}` : `https://www.youtube.com/watch?v=${id}`;
+  const result = { site: 'yt', url, kind, title: '', author: '', duration: 0, views: 0, live: kind === 'live', image: null };
+
+  // oEmbed is the official, small metadata endpoint (no consent page).
+  try {
+    const r = await fetchLimited(
+      new URL(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`),
+      (h) => h === 'youtube.com' || h === 'www.youtube.com', 200000, 'application/json', false,
+    );
+    const j = JSON.parse(r.body.toString('utf8'));
+    result.title = String(j.title || '').slice(0, 300);
+    result.author = String(j.author_name || '').slice(0, 100);
+  } catch {}
+
+  // The watch page adds the duration/views shown on the card; a failure here
+  // still leaves a usable preview from oEmbed and the thumbnail.
+  try {
+    const page = await fetchLimited(new URL(url), (h) => YT_PAGE_HOSTS.has(h), 2000000, 'text/html', true, BROWSER_UA);
+    const html = page.body.toString('utf8');
+    if (!result.title) {
+      const t = /<title>([^<]+)<\/title>/i.exec(html);
+      if (t) result.title = decodeEntities(t[1]).replace(/\s*-\s*YouTube\s*$/i, '').slice(0, 300);
+    }
+    if (!result.author) {
+      const a = /"channelName":"([^"]+)"/.exec(html);
+      if (a) {
+        try { result.author = decodeEntities(JSON.parse(`"${a[1]}"`)).slice(0, 100); }
+        catch { result.author = decodeEntities(a[1]).slice(0, 100); }
+      }
+    }
+    const d = /"lengthSeconds":"(\d+)"/.exec(html);
+    if (d) result.duration = Math.min(Number(d[1]) || 0, 86400);
+    const v = /"viewCount":"(\d+)"/.exec(html);
+    if (v) result.views = Math.min(Number(v[1]) || 0, 1e12);
+    if (/"isLive":true/.test(html)) result.live = true;
+  } catch {}
+
+  // hqdefault always exists and is 4:3 with the 16:9 frame letterboxed; the
+  // card's object-fit: cover crops exactly those bars.
+  try {
+    const pic = await fetchLimited(new URL(`https://i.ytimg.com/vi/${id}/hqdefault.jpg`), (h) => YT_IMG_HOST_RE.test(h), 2000000, 'image/*', false);
+    const type = pic.type.split(';')[0].trim();
+    if (/^image\/(jpeg|png|webp)$/.test(type)) result.image = `data:${type};base64,${pic.body.toString('base64')}`;
+  } catch {}
+
+  return result;
+}
+
 async function buildPreview(raw) {
   const start = new URL(raw);
+  const ytId = youtubeId(start);
+  if (ytId) return buildYouTubePreview(start, ytId);
   if (!PAGE_HOSTS.has(start.hostname) || !(IG_PATH_RE.test(start.pathname) || SHARE_PATH_RE.test(start.pathname))) throw new Error('not instagram');
   const page = await fetchLimited(new URL(start.origin + start.pathname), (h) => PAGE_HOSTS.has(h), 1500000, 'text/html', true);
   const path = IG_PATH_RE.exec(page.url.pathname);
@@ -152,6 +225,7 @@ async function buildPreview(raw) {
   const kind = path[1] === 'reels' ? 'reel' : path[1];
   const tags = metaTags(page.body.toString('utf8'));
   const result = {
+    site: 'ig',
     url: `https://www.instagram.com/${kind}/${path[2]}/`,
     kind,
     title: (tags['og:title'] || tags['twitter:title'] || '').slice(0, 300),
