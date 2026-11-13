@@ -8,7 +8,7 @@ use Laravel\Nova\Nova;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * An admin without two-factor authentication or a passkey can only reach
+ * An admin without an authenticator code (TOTP) can only reach
  * the account-security page (to set one up) and log out. Everything else in
  * the panel stays closed until then.
  */
@@ -28,10 +28,15 @@ class RequireTwoFactor
         return redirect(Nova::url('/user-security'));
     }
 
+    /**
+     * The panel is no longer behind Cloudflare Access, so the password must
+     * always be paired with an authenticator code (TOTP): Fortify then asks
+     * for it at every password sign-in. A passkey alone does not count, since
+     * having one does not make the password sign-in ask for a second factor.
+     */
     private function secured($user): bool
     {
-        return filled($user->two_factor_confirmed_at)
-            || (method_exists($user, 'passkeys') && $user->passkeys()->exists());
+        return filled($user->two_factor_confirmed_at);
     }
 
     private function allowed(Request $request): bool

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">نجوا</string>
+    <string name="channel_messages">پیام‌ها</string>
+    <string name="channel_service">اتصال پایدار</string>
+    <string name="notif_new_message">پیام تازه</string>
+    <string name="notif_new_message_body">یک پیام تازه در نجوا دارید</string>
+    <string name="notif_service_title">نجوا متصل است</string>
+    <string name="notif_service_body">پیام‌ها بی‌درنگ می‌رسند</string>
+</resources>

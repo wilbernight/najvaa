@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>گزارش تخلف · نجوا</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="report.css">
+<script src="cap/setup.js"></script>
+<script src="cap/cap.min.js" defer></script>
+<script src="report.js" defer></script>
+</head>
+<body>
+<main class="card">
+  <img src="favicon.svg" alt="" width="56" height="56">
+  <h1>گزارش تخلف</h1>
+  <p class="muted">اگر از اتاقی در نجوا برای آزار، تهدید، کلاهبرداری یا جرم استفاده می‌شود، کد ۷ رقمی آن را گزارش کنید. گزارش به مدیران نجوا می‌رسد. نشانی IP شما همراه گزارش ذخیره نمی‌شود.</p>
+  <form id="f" novalidate>
+    <label>کد اتاق
+      <input id="code" inputmode="numeric" autocomplete="off" maxlength="7" required placeholder="۱۲۳۴۵۶۷">
+    </label>
+    <label>نوع تخلف
+      <select id="reason" required>
+        <option value="">انتخاب کنید…</option>
+        <option value="csam">سوءاستفاده از کودکان</option>
+        <option value="terror">تروریسم یا خشونت</option>
+        <option value="threat">تهدید یا اخاذی</option>
+        <option value="fraud">کلاهبرداری</option>
+        <option value="abuse">آزار و مزاحمت</option>
+        <option value="spam">هرزنامه</option>
+        <option value="other">سایر</option>
+      </select>
+    </label>
+    <label>توضیح (اختیاری)
+      <textarea id="text" maxlength="2000" rows="5"></textarea>
+    </label>
+    <label>راه تماس با شما (اختیاری)
+      <input id="contact" maxlength="200" autocomplete="off" placeholder="اگر مایلید پیگیری شود">
+    </label>
+    <p class="note">محتوای گفتگوها رمزنگاری سرتاسری است و مدیران آن را نمی‌بینند؛ توضیح شما به رسیدگی کمک می‌کند. مدیران می‌توانند اتاق را مسدود کنند یا داده‌های آن را برای مراجع قانونی حفظ کنند.</p>
+    <cap-widget id="cap" data-cap-api-endpoint="/h/cap/" data-cap-i18n-initial-state="تأیید کنید که انسان هستید" data-cap-i18n-verifying-label="در حال تأیید…" data-cap-i18n-solved-label="تأیید شد" data-cap-i18n-error-label="خطا؛ دوباره تلاش کنید" data-cap-i18n-required-label="لطفاً ابتدا تأیید کنید" data-cap-i18n-troubleshooting-label="عیب‌یابی" data-cap-i18n-wasm-disabled="برای تأیید سریع‌تر، WebAssembly مرورگر را فعال کنید" data-cap-i18n-group-aria-label="تأیید انسان بودن" data-cap-i18n-verify-aria-label="برای تأیید انسان بودن کلیک کنید" data-cap-i18n-verifying-aria-label="در حال تأیید انسان بودن، لطفاً صبر کنید" data-cap-i18n-verified-aria-label="تأیید شد؛ می‌توانید ادامه دهید" data-cap-i18n-error-aria-label="خطایی رخ داد؛ دوباره تلاش کنید"></cap-widget>
+    <button id="send" type="submit">ارسال گزارش</button>
+    <p id="msg" role="status" hidden></p>
+  </form>
+  <a class="back" href="/">بازگشت به نجوا</a>
+</main>
+</body>
+</html>

@@ -223,6 +223,19 @@ async function passKeyFor(code, pass) {
   return pbkdf2(pass, te.encode('najva/v1/' + code));
 }
 
+// Asks the relay whether a room with this code exists (only rooms made with
+// the creation password do). Any failure counts as yes, so a network hiccup
+// never locks anyone out; the relay refuses a missing room anyway (4011).
+async function roomExists(code) {
+  try {
+    const id = b64u(await hkdf(te.encode('najva/room/' + code), ZERO, 'wn1/room-id', 16));
+    const r = await fetch(`/h/room?id=${id}`, { cache: 'no-store' });
+    if (!r.ok) return true;
+    return (await r.json()).exists !== false;
+  } catch { return true; }
+}
+const NO_ROOM = 'این اتاق وجود ندارد';
+
 async function openRoom(code, pass, creating) {
   room.code = code;
   room.id = b64u(await hkdf(te.encode('najva/room/' + code), ZERO, 'wn1/room-id', 16));
@@ -254,15 +267,28 @@ function connect() {
   clearTimeout(reconnectTimer);
   setStatus('connecting');
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const sock = new WebSocket(`${proto}://${location.host}/ws?room=${room.id}&cid=${cid}${room.creating ? '&new=1' : ''}`);
+  const sock = new WebSocket(`${proto}://${location.host}/ws?room=${room.id}&cid=${cid}${room.creating ? '&new=1' + (room.createKey ? '&ck=' + encodeURIComponent(room.createKey) : '') : ''}`);
   sock.binaryType = 'arraybuffer';
   ws = sock;
   sock.onopen = () => {
     reconnectDelay = 1000;
+    lastRx = Date.now();
     clearInterval(pingTimer);
-    pingTimer = setInterval(() => sock.readyState === 1 && sock.send('{"t":"ping"}'), 20000);
+    pingTimer = setInterval(() => {
+      if (sock.readyState !== 1) return;
+      // An upload still draining is progress too (our ping waits behind it).
+      const buf = sock.bufferedAmount;
+      if (buf && buf !== sock.lastBuf) lastRx = Date.now();
+      sock.lastBuf = buf;
+      // The relay answers every ping. Silence this long means the connection
+      // died without a close (common on mobile networks): everything sent on
+      // it is lost, so drop it and reconnect instead of waiting for the OS.
+      if (Date.now() - lastRx > 40000) { dropSocket(sock); return; }
+      sock.send('{"t":"ping"}');
+    }, 15000);
   };
   sock.onmessage = (ev) => {
+    lastRx = Date.now();
     if (ev.data instanceof ArrayBuffer) { serial(() => onChunk(new Uint8Array(ev.data))); return; }
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
@@ -275,8 +301,12 @@ function connect() {
     if (leaving) return;
     if (ev.code === 4001) { setStatus('full'); return; }
     if (ev.code === 4003) { setStatus('closed'); return; }   // new rooms switched off by the admin
+    if (ev.code === 4004) { room.createKey = ''; setStatus('badkey'); return; }  // wrong room-creation password
+    if (ev.code === 4011) { show('home'); step('join'); formError('join-error', NO_ROOM); return; }   // no room with this code
     if (ev.code === 4009) { setStatus('deleted'); return; }  // room deleted by the admin
     if (ev.code === 4010) { setStatus('kicked'); return; }   // devices disconnected by the admin
+    if (ev.code === 4012) { setStatus('suspended'); return; }  // room suspended by the admin
+    if (ev.code === 4013) { setStatus('blocked'); return; }    // this network address is blocked
     if (ev.code === 4002 && room.creating && room.pendingPass) {
       // Someone is already in a room with this code: pick a fresh one.
       toast('این کد در حال استفاده بود؛ کد تازه ساخته شد');
@@ -289,6 +319,29 @@ function connect() {
   };
 }
 
+let lastRx = 0;
+// Treat a socket as closed right away (its own close event, if it ever comes,
+// is ignored because ws no longer points at it).
+function dropSocket(sock) {
+  if (ws !== sock) return;
+  const onclose = sock.onclose;
+  sock.onclose = null;
+  try { sock.close(); } catch {}
+  reconnectDelay = 1000;
+  onclose.call(sock, { code: 1006 });
+}
+
+// Back in view or back online: check the socket answers before trusting it.
+function probeSocket() {
+  const sock = ws;
+  if (!sock || sock.readyState !== 1 || leaving || sock.bufferedAmount) return;
+  const sent = Date.now();
+  try { sock.send('{"t":"ping"}'); } catch { dropSocket(sock); return; }
+  setTimeout(() => { if (ws === sock && lastRx < sent) dropSocket(sock); }, 6000);
+}
+window.addEventListener('online', probeSocket);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') probeSocket(); });
+
 function wireSend(obj) {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
 }
@@ -297,6 +350,9 @@ async function onWire(msg) {
   switch (msg.t) {
     case 'ver':
       if (typeof msg.v === 'string') newVersion(msg.v);
+      break;
+    case 'notice':
+      showNotice(msg.notice);
       break;
     case 'due':
       fetchDue();
@@ -307,6 +363,7 @@ async function onWire(msg) {
       setTimeout(fetchDue, 2500); // scheduled messages that came due while offline
       iceServers = Array.isArray(msg.ice) ? msg.ice : [];
       applyFeatures(msg.features);
+      showNotice(msg.notice);
       room.creating = false;
       room.pendingPass = null;
       updatePresence();
@@ -324,6 +381,7 @@ async function onWire(msg) {
       break;
     case 'peer-left':
       if (sessions.get(msg.id)?.secure) notice(`${peerName(msg.id)} از اتاق خارج شد`);
+      hsTries.delete(msg.id);
       await endSession(msg.id);
       break;
     case 'hello':
@@ -344,14 +402,43 @@ async function startHandshake(pid) {
     x: (await hasX25519()) ? await genKeyPair('x25519') : null,
     nonce: rand(16),
   };
+  // Public half only, kept to send again if the key exchange stalls.
+  s.hello = { t: 'hello', to: pid, v: 1, p: b64u(s.p.pub), x: s.x ? b64u(s.x.pub) : null, n: b64u(s.nonce) };
   sessions.set(pid, s);
   updatePresence();
-  wireSend({ t: 'hello', to: pid, v: 1, p: b64u(s.p.pub), x: s.x ? b64u(s.x.pub) : null, n: b64u(s.nonce) });
+  wireSend(s.hello);
+  armHandshakeRetry(s);
+}
+
+// A key exchange that has not finished in a few seconds lost a message on the
+// way (a socket that dropped for a moment, a hello sent to a peer that was
+// reconnecting). First send our hello again (r: the peer may have derived
+// from it already, or never got it); if that does not help, start over with
+// fresh keys, slower after a few tries.
+const hsTries = new Map(); // peer -> key exchanges started without success
+function armHandshakeRetry(s) {
+  const n = (hsTries.get(s.peer) || 0) + 1;
+  hsTries.set(s.peer, n);
+  const jitter = () => Math.floor(Math.random() * 2000);
+  const stalled = () => sessions.get(s.peer) === s && !s.secure && !s.failed && ws && ws.readyState === 1;
+  s.hsTimer = setTimeout(() => {
+    if (!stalled()) return;
+    wireSend({ ...s.hello, r: 1 });
+    s.hsTimer = setTimeout(() => {
+      if (stalled()) serial(() => (stalled() ? startHandshake(s.peer) : null));
+    }, (n <= 3 ? 6000 : 25000) + jitter());
+  }, 8000 + jitter());
 }
 
 async function onHello(h) {
-  if (!PID_RE.test(h.from) || h.v !== 1) return;
+  if (!PID_RE.test(h.from) || h.v !== 1 || typeof h.p !== 'string') return;
   let s = sessions.get(h.from);
+  if (s && s.root && h.p === s.peerP) {
+    // The hello we already derived from, sent again: the peer is stuck, most
+    // likely because ours never reached it. Send ours once more.
+    if (h.r && !s.secure && !s.echoed) { s.echoed = true; wireSend({ ...s.hello, r: 1 }); }
+    return;
+  }
   if (!s || s.root) { await startHandshake(h.from); s = sessions.get(h.from); }
   try {
     const peer = { p: unb64u(h.p), x: h.x ? unb64u(h.x) : null, nonce: unb64u(h.n) };
@@ -367,6 +454,7 @@ async function onHello(h) {
 
     s.root = await hkdf(shared, room.psk, 'wn1/root/' + b64u(transcript));
     wipe(shared);
+    s.peerP = h.p;
     s.sas = await sha256(concat(s.root, te.encode('wn1/sas')));
     s.p = s.x = null; // drop ephemeral private keys
     s.recv = new Map();
@@ -407,6 +495,7 @@ async function endSession(pid) {
   const s = sessions.get(pid);
   if (!s) return;
   sessions.delete(pid);
+  clearTimeout(s.hsTimer);
   // Losing a signaling session must not end a live call: the audio path is
   // peer-to-peer and usually survives a network blip. Hold the call and give
   // the signaling time to come back (a fresh handshake re-arms it).
@@ -549,7 +638,15 @@ async function onCipher(m) {
       }
     }
   } catch {
-    if (!s.secure) failAuth(s);
+    if (!s.secure) {
+      // Before the first confirm a mismatch can also be a leftover from an
+      // earlier attempt of a retried key exchange: try again a couple of
+      // times before blaming the password.
+      if ((hsTries.get(s.peer) || 0) < 3 && !s.mismatch) {
+        s.mismatch = true;
+        setTimeout(() => serial(() => (sessions.get(s.peer) === s && !s.secure ? startHandshake(s.peer) : null)), 0);
+      } else if (!s.mismatch) failAuth(s);
+    }
     return; // forged, replayed or corrupted: drop silently
   }
   s.epochMsgs++;
@@ -564,6 +661,8 @@ async function onInner(s, o) {
     case 'confirm':
       if (s.secure) return;
       s.secure = true;
+      clearTimeout(s.hsTimer);
+      hsTries.delete(s.peer);
       clearBanner('auth'); // only the password warning; other banners stay
       await sendInner(s, { k: 'hi', name: myName, dv: myDev, ty: matchMedia('(pointer: coarse)').matches ? 'm' : 'd' });
       updatePresence();
@@ -5705,7 +5804,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-11-06.3';
+const APP_VERSION = '2026-11-13.9';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.
@@ -6071,9 +6170,37 @@ const STATUS = {
   failed: ['احراز هویت ناموفق', 'red'],
   full: ['این اتاق پر است (حداکثر ۳ دستگاه)', 'red'],
   closed: ['ساخت اتاق جدید فعلاً غیرفعال است', 'red'],
+  badkey: ['رمز ایجاد اتاق نادرست است — برگردید و دوباره بسازید', 'red'],
+  noroom: ['اتاقی با این کد وجود ندارد', 'red'],
   deleted: ['این اتاق توسط مدیر حذف شد', 'red'],
   kicked: ['اتصال این اتاق توسط مدیر قطع شد', 'red'],
+  suspended: ['این اتاق به دستور مدیریت مسدود شده است', 'red'],
+  blocked: ['دسترسی از این شبکه مسدود شده است', 'red'],
 };
+
+// A service notice from the admin (maintenance, outage, policy): a thin bar
+// at the top until it is cleared; closing it hides it for this tab.
+function showNotice(n) {
+  let el = document.getElementById('svc-notice');
+  if (!n || typeof n.text !== 'string' || !n.text) { if (el) el.remove(); return; }
+  try { if (sessionStorage.getItem('najva-notice-x') === n.text) return; } catch {}
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'svc-notice';
+    el.setAttribute('role', 'status');
+    document.body.append(el);
+  }
+  el.className = `svc-notice ${['info', 'warn', 'alert'].includes(n.level) ? n.level : 'info'}`;
+  el.textContent = '';
+  const t = document.createElement('span');
+  t.textContent = n.text.slice(0, 500);
+  const x = document.createElement('button');
+  x.type = 'button';
+  x.setAttribute('aria-label', 'بستن');
+  x.textContent = '×';
+  x.addEventListener('click', () => { el.remove(); try { sessionStorage.setItem('najva-notice-x', n.text); } catch {} });
+  el.append(t, x);
+}
 function setStatus(key, n = 1) {
   const [base, color] = STATUS[key];
   const text = key === 'secure' && n > 1 ? `${base} · ${fa(n + 1)} دستگاه` : base;
@@ -6774,6 +6901,10 @@ function bindEntry() {
     e.preventDefault();
     const pass = $('new-pass').value;
     if (pass.length < MIN_PASS) { formError('create-error', `رمز باید دست‌کم ${fa(MIN_PASS)} کاراکتر باشد`); return; }
+    const createKey = $('create-key').value.trim().replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/[٠-٩]/g, (d) => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
+    if (!createKey) { formError('create-error', 'رمز ایجاد اتاق را وارد کنید'); return; }
+    room.createKey = createKey;
+    $('create-key').value = '';
     myName = $('new-name').value.replace(/\s+/g, ' ').trim().slice(0, 30) || defaultName();
     saveName(myName);
     $('new-pass').value = '';
@@ -6786,10 +6917,11 @@ function bindEntry() {
     $('join-code').value = d;
     if (d.length === 7) $('join-step').requestSubmit();
   });
-  $('join-step').onsubmit = (e) => {
+  $('join-step').onsubmit = async (e) => {
     e.preventDefault();
     const d = normDigits($('join-code').value);
     if (d.length !== 7) { formError('join-error', 'کد اتاق باید ۷ رقم باشد'); return; }
+    if (!(await roomExists(d))) { formError('join-error', NO_ROOM); return; }
     joinCode = d;
     $('pass-code').textContent = fmtCode(d);
     step('pass');
@@ -6801,18 +6933,20 @@ function bindEntry() {
     if (!pass) { formError('pass-error', 'رمز اتاق را وارد کنید'); return; }
     myName = $('join-name').value.replace(/\s+/g, ' ').trim().slice(0, 30) || defaultName();
     saveName(myName);
+    if (!(await roomExists(joinCode))) { step('join'); formError('join-error', NO_ROOM); return; }
     $('join-pass').value = '';
     show('busy');
     await openRoom(joinCode, pass, false);
   };
 
   // Deep link from the SMS: /#1234567 opens straight at the password step.
-  return (code) => {
+  return async (code) => {
     joinCode = code;
     $('join-code').value = code;
     $('pass-code').textContent = fmtCode(code);
     step('pass');
     $('join-pass').focus();
+    if (!(await roomExists(code))) { step('join'); formError('join-error', NO_ROOM); }
   };
 }
 

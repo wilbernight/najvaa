@@ -1,7 +1,8 @@
 'use strict';
 // Blind relay for the two-person E2EE room. It never sees keys or plaintext:
 // it pairs at most two sockets per room id and forwards opaque frames between
-// them. Nothing is stored or logged.
+// them. Nothing about connections is logged, except for a room the admin has
+// put under a time-limited, case-bound watch (see "legal flags" below).
 
 const http = require('http');
 const https = require('https');
@@ -56,17 +57,25 @@ async function cloudflareIce() {
   }
 }
 
+// Our own coturn (TURN_URLS, on the panah server) is handed out next to
+// Cloudflare's, not instead of it: some Iranian networks block one and not
+// the other, and the browser keeps whichever relay path actually works.
+function ownTurn() {
+  if (!TURN_URLS.length || !TURN_SECRET) return null;
+  // coturn "use-auth-secret" REST credentials, valid for TURN_TTL seconds.
+  const username = `${Math.floor(Date.now() / 1000) + TURN_TTL}:${crypto.randomBytes(6).toString('hex')}`;
+  const credential = crypto.createHmac('sha1', TURN_SECRET).update(username).digest('base64');
+  return { urls: TURN_URLS, username, credential };
+}
+
 async function iceServers() {
+  const own = ownTurn();
+  const cf = await cloudflareIce();
+  if (cf.length) return own ? [...cf, own] : cf;
   const list = [];
   if (STUN_URLS.length) list.push({ urls: STUN_URLS });
-  if (TURN_URLS.length && TURN_SECRET) {
-    // coturn "use-auth-secret" REST credentials, valid for TURN_TTL seconds.
-    const username = `${Math.floor(Date.now() / 1000) + TURN_TTL}:${crypto.randomBytes(6).toString('hex')}`;
-    const credential = crypto.createHmac('sha1', TURN_SECRET).update(username).digest('base64');
-    list.push({ urls: TURN_URLS, username, credential });
-  }
-  const cf = await cloudflareIce();
-  return cf.length ? cf : list;
+  if (own) list.push(own);
+  return list;
 }
 
 function send(ws, obj) {
@@ -441,6 +450,114 @@ let storeBudget = 6000;
 setInterval(() => { storeBudget = 6000; }, 60000);
 fs.mkdirSync(ROOMS_DIR, { recursive: true });
 
+// Room-creation password. When ROOM_CREATE_KEY_SHA256 (hex sha256 of the
+// password) is set, a new room can only be opened by a client that sends that
+// password with its first connection (?ck=); the relay then makes the room's
+// directory, and nothing else may make one: the store refuses to register an
+// unknown room, and a plain join to a room that does not exist is refused.
+// Wrong guesses share one small budget, so the password cannot be brute-forced.
+const CREATE_KEY_HASH = /^[0-9a-f]{64}$/i.test(process.env.ROOM_CREATE_KEY_SHA256 || '')
+  ? Buffer.from(process.env.ROOM_CREATE_KEY_SHA256, 'hex') : null;
+let createFailBudget = 10;
+setInterval(() => { createFailBudget = 10; }, 10 * 60000);
+function createKeyOk(given) {
+  if (!CREATE_KEY_HASH) return true;
+  if (createFailBudget <= 0) return false;
+  const h = crypto.createHash('sha256').update(String(given || '').slice(0, 200)).digest();
+  if (crypto.timingSafeEqual(h, CREATE_KEY_HASH)) return true;
+  createFailBudget--;
+  return false;
+}
+const roomKnown = (room) => fs.existsSync(path.join(ROOMS_DIR, room));
+
+// ---------- legal flags (set from the admin panel only) ----------
+// Each is a small JSON file in the room's directory, so it survives restarts.
+//  hold    - legal preservation. Nothing in the room is destroyed: deletes by
+//            the devices, self-destruct timers, the age limit and the storage
+//            cap move entries into held/ instead (out of every listing, kept
+//            as they were). The admin cannot delete the room while it is held.
+//  suspend - the room is closed: devices are refused (4012) and its store
+//            answers 451.
+//  watch   - a targeted connection log for this one room (time, address,
+//            device id, user agent, country), only on a case reference and
+//            only until a set time. No other room is ever logged.
+// The content stays end-to-end encrypted in every case: no flag can open it.
+const FLAG_KEYS = ['hold', 'suspend', 'watch'];
+const flagCache = new Map(); // roomId -> {hold?, suspend?, watch?}
+function roomFlags(room) {
+  let f = flagCache.get(room);
+  if (!f) {
+    f = {};
+    if (ROOM_RE.test(room) && roomKnown(room)) {
+      for (const k of FLAG_KEYS) {
+        try { f[k] = JSON.parse(fs.readFileSync(path.join(ROOMS_DIR, room, `${k}.flag`), 'utf8')); } catch {}
+      }
+      flagCache.set(room, f);
+    }
+  }
+  if (f.watch && f.watch.until && f.watch.until < Date.now()) return { ...f, watch: undefined };
+  return f;
+}
+
+// The visitor's address as Cloudflare reports it (nginx passes the header on).
+function clientIp(req) {
+  for (const h of ['cf-connecting-ip', 'x-real-ip']) {
+    const v = String(req.headers[h] || '').trim();
+    if (net.isIP(v)) return v;
+  }
+  return String(req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
+}
+function clientMeta(req) {
+  return {
+    ip: clientIp(req),
+    ua: String(req.headers['user-agent'] || '').slice(0, 200),
+    cc: String(req.headers['cf-ipcountry'] || '').slice(0, 2),
+  };
+}
+
+// Connection log of a watched room: one JSON line per event, capped in size.
+const CONN_LOG_MAX = 20 * 1024 * 1024;
+async function connLog(room, ev, meta, extra = {}) {
+  const f = roomFlags(room);
+  if (!f.watch) return;
+  const file = path.join(ROOMS_DIR, room, 'conn.log');
+  const st = await fsp.stat(file).catch(() => null);
+  if (st && st.size > CONN_LOG_MAX) return;
+  const line = JSON.stringify({ ts: Date.now(), ev, ...meta, ...extra, case: f.watch.case || '' });
+  await fsp.appendFile(file, `${line}\n`).catch(() => {});
+}
+
+// Address block list (admin panel): exact addresses or CIDR ranges.
+const BLOCKS_FILE = path.join(STORE, 'blocks.json');
+let blocks = [];
+let blockList = new net.BlockList();
+function applyBlocks(list) {
+  const now = Date.now();
+  const next = new net.BlockList();
+  const kept = [];
+  for (const b of Array.isArray(list) ? list.slice(0, 5000) : []) {
+    const [addr, bits] = String(b.cidr || '').split('/');
+    const fam = net.isIP(addr);
+    if (!fam || (b.until && b.until < now)) continue;
+    const type = fam === 6 ? 'ipv6' : 'ipv4';
+    const max = fam === 6 ? 128 : 32;
+    const prefix = bits === undefined ? max : Number(bits);
+    if (!Number.isInteger(prefix) || prefix < 0 || prefix > max) continue;
+    try {
+      if (prefix === max) next.addAddress(addr, type); else next.addSubnet(addr, prefix, type);
+    } catch { continue; }
+    kept.push({ cidr: `${addr}${prefix === max ? '' : `/${prefix}`}`, until: Number(b.until) || 0, note: String(b.note || '').slice(0, 200) });
+  }
+  blocks = kept;
+  blockList = next;
+}
+try { applyBlocks(JSON.parse(fs.readFileSync(BLOCKS_FILE, 'utf8'))); } catch {}
+setInterval(() => { if (blocks.some((b) => b.until && b.until < Date.now())) applyBlocks(blocks); }, 60000);
+function ipIsBlocked(ip) {
+  if (!blocks.length || !net.isIP(ip)) return false;
+  try { return blockList.check(ip, net.isIP(ip) === 6 ? 'ipv6' : 'ipv4'); } catch { return false; }
+}
+
 const pad13 = (n) => String(n).padStart(13, '0');
 const entryName = (e) => `${pad13(e.ts)}-${e.id}-${e.exp || 0}-${e.blob ? 1 : 0}.json`;
 function parseEntry(name) {
@@ -476,6 +593,8 @@ async function storeAuth(req, mayCreate) {
     // Only a genuinely new room counts against the cap: a room whose
     // registration was reset must always be able to register again.
     const known = await fsp.stat(dir).then(() => true).catch(() => false);
+    // With a creation password, only the relay itself opens room directories.
+    if (!known && CREATE_KEY_HASH) return { claimed: true };
     if (!known) {
       const roomsNow = await fsp.readdir(ROOMS_DIR).catch(() => []);
       if (roomsNow.length >= MAX_STORE_ROOMS) return { full: true };
@@ -650,6 +769,25 @@ async function dropEntry(dir, e) {
   if (e.blob) await fsp.rm(path.join(dir, 'blob', e.id), { recursive: true, force: true });
 }
 
+// Legal hold: an entry that would be deleted is moved into held/ instead,
+// under the time it was retired, and no listing ever shows it again.
+async function retireEntry(dir, e) {
+  await fsp.mkdir(path.join(dir, 'held', 'log'), { recursive: true });
+  await fsp.rename(path.join(dir, 'log', e.name), path.join(dir, 'held', 'log', `${pad13(Date.now())}-${e.name}`)).catch(() => {});
+  if (e.blob) await retireBlob(dir, e.id);
+}
+async function retireBlob(dir, id) {
+  const from = path.join(dir, 'blob', id);
+  if (!(await fsp.stat(from).catch(() => null))) return;
+  await fsp.mkdir(path.join(dir, 'held', 'blob'), { recursive: true });
+  const to = path.join(dir, 'held', 'blob', id);
+  await fsp.rename(from, (await fsp.stat(to).catch(() => null)) ? `${to}.${Date.now()}` : to).catch(() => {});
+}
+const isHeld = (dir) => !!roomFlags(path.basename(dir)).hold;
+async function removeEntry(dir, e) {
+  return isHeld(dir) ? retireEntry(dir, e) : dropEntry(dir, e);
+}
+
 async function writeAtomic(file, data) {
   const tmp = `${file}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   await fsp.writeFile(tmp, data);
@@ -688,6 +826,13 @@ async function handleStore(req, res) {
       return json(res, 404, {});
     }
     const { dir } = auth;
+    const roomId = path.basename(dir);
+    const flags = roomFlags(roomId);
+    if (flags.suspend) return json(res, 451, { error: 'suspended' });
+    if (flags.watch && req.method !== 'GET') {
+      const ev = isLog ? 'store' : isBlob ? (parts[3] === '0' ? 'upload' : '') : parts[1];
+      if (ev) connLog(roomId, ev, clientMeta(req), isLog ? { item: entry.id } : isBlob ? { item: parts[2] } : {});
+    }
     // POST /h/log  {id, iv, ct, blob, exp}
     if (entry) {
       const existing = (await listEntries(dir)).find((e) => e.id === entry.id);
@@ -744,12 +889,20 @@ async function handleStore(req, res) {
       const b = JSON.parse((await readBodyBuf(req, 64 * 1024)).toString('utf8'));
       if (!Array.isArray(b.ids)) return json(res, 400, {});
       const want = new Set(b.ids.filter((x) => EID_RE.test(x)).slice(0, 2000));
-      for (const e of await listEntries(dir)) if (want.has(e.id)) await dropEntry(dir, e);
-      for (const id of want) await fsp.rm(path.join(dir, 'blob', id), { recursive: true, force: true });
+      for (const e of await listEntries(dir)) if (want.has(e.id)) await removeEntry(dir, e);
+      for (const id of want) {
+        if (isHeld(dir)) await retireBlob(dir, id);
+        else await fsp.rm(path.join(dir, 'blob', id), { recursive: true, force: true });
+      }
       return json(res, 200, {});
     }
     // POST /h/clear: delete everything in this room (keeps its registration)
     if (req.method === 'POST' && parts[1] === 'clear') {
+      if (isHeld(dir)) {
+        for (const e of await listEntries(dir)) await retireEntry(dir, e);
+        for (const b of await fsp.readdir(path.join(dir, 'blob')).catch(() => [])) await retireBlob(dir, b);
+        return json(res, 200, {});
+      }
       await fsp.rm(path.join(dir, 'log'), { recursive: true, force: true });
       await fsp.rm(path.join(dir, 'blob'), { recursive: true, force: true });
       await fsp.mkdir(path.join(dir, 'log'), { recursive: true });
@@ -825,13 +978,17 @@ async function janitor() {
     for (const room of await fsp.readdir(ROOMS_DIR).catch(() => [])) {
       if (!ROOM_RE.test(room)) continue;
       const dir = path.join(ROOMS_DIR, room);
+      // A room under legal hold loses nothing: what would expire is retired
+      // into held/, and none of it is ever evicted for the cap.
+      const held = !!roomFlags(room).hold;
       const liveBlobs = new Set();
+      if (held) total += await dirSize(path.join(dir, 'held'));
       for (const e of await listEntries(dir)) {
-        if ((e.exp && e.exp <= now) || e.ts < now - MAX_AGE_MS) { await dropEntry(dir, e); continue; }
+        if ((e.exp && e.exp <= now) || e.ts < now - MAX_AGE_MS) { await (held ? retireEntry(dir, e) : dropEntry(dir, e)); continue; }
         const st = await fsp.stat(path.join(dir, 'log', e.name)).catch(() => null);
         let size = st ? st.size : 0;
         if (e.blob) { liveBlobs.add(e.id); size += await dirSize(path.join(dir, 'blob', e.id)); }
-        all.push({ dir, e, size });
+        if (!held) all.push({ dir, e, size });
         total += size;
       }
       for (const b of await fsp.readdir(path.join(dir, 'blob')).catch(() => [])) {
@@ -839,6 +996,7 @@ async function janitor() {
         const p = path.join(dir, 'blob', b);
         const st = await fsp.stat(p).catch(() => null);
         if (!st) continue;
+        if (held) { total += await dirSize(p); continue; }
         // A blob no stored entry points at is an upload still in flight (or
         // junk). It is dropped after a day, and it is the first thing to go
         // when the store is above its cap - otherwise it would be a hole in it.
@@ -851,7 +1009,11 @@ async function janitor() {
       // quickly, so empty rooms cannot pile up or squat a code for long.
       const st = await fsp.stat(path.join(dir, 'auth')).catch(() => null);
       const empty = !liveBlobs.size && !(await listEntries(dir)).length;
-      if (empty && st && now - st.mtimeMs > EMPTY_ROOM_MS) {
+      // A room opened with the creation password but never written to has no
+      // auth file yet; it goes after the same delay, counted from its creation.
+      const made = st || (empty && !rooms.get(room)?.size ? await fsp.stat(path.join(dir, 'created')).catch(() => null) : null);
+      const flagged = FLAG_KEYS.some((k) => roomFlags(room)[k]);
+      if (empty && made && !flagged && now - made.mtimeMs > EMPTY_ROOM_MS) {
         await fsp.rm(dir, { recursive: true, force: true });
         continue;
       }
@@ -859,7 +1021,7 @@ async function janitor() {
       // them, so thousands of rooms show up against the cap as well.
       const overhead = (st ? st.size : 0) + 8192;
       total += overhead;
-      if (empty) all.push({ dir, e: { ts: st ? st.mtimeMs : 0, empty: true }, size: overhead });
+      if (empty && !flagged) all.push({ dir, e: { ts: st ? st.mtimeMs : 0, empty: true }, size: overhead });
     }
     if (total > CAP_BYTES) {
       all.sort((a, b) => a.e.ts - b.e.ts);
@@ -881,8 +1043,137 @@ async function janitor() {
 setTimeout(janitor, 5000);
 setInterval(janitor, 5 * 60000);
 
+// ---------- proof-of-work CAPTCHA (Cap protocol, self-hosted) ----------
+// POST /h/cap/challenge → { challenge: {c, s, d}, token, expires }
+// POST /h/cap/redeem    { token, solutions } → { success, token, expires }
+// The browser (the self-hosted Cap widget on report.html) must find, for each
+// of c salts derived from the token, a number n with sha256(salt + n) starting
+// with a d-hex-digit target: ~65k hashes each, about a second with WASM, but
+// costly to do in bulk. Challenges and tokens are single use and kept in
+// memory only; nothing about the visitor is stored.
+const CAP = { c: 50, s: 32, d: 4, challengeMs: 10 * 60000, tokenMs: 20 * 60000, maxPending: 20000 };
+const capChallenges = new Map();   // token → expires
+const capTokens = new Map();       // `${id}:${sha256(secret)}` → expires
+const capByIp = new Map();         // ip → challenges issued this window
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, exp] of capChallenges) if (exp < now) capChallenges.delete(k);
+  for (const [k, exp] of capTokens) if (exp < now) capTokens.delete(k);
+  capByIp.clear();
+}, 10 * 60000).unref();
+// The same deterministic generator the widget uses to expand a token.
+function capPrng(seed, length) {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+  }
+  let state = h >>> 0;
+  let out = '';
+  while (out.length < length) {
+    state ^= state << 13; state ^= state >>> 17; state ^= state << 5;
+    out += (state >>> 0).toString(16).padStart(8, '0');
+  }
+  return out.slice(0, length);
+}
+const sha256hex = (s) => crypto.createHash('sha256').update(s).digest('hex');
+async function handleCapChallenge(req, res) {
+  if (!okOrigin(req.headers.origin)) return json(res, 403, { error: 'origin' });
+  const ip = clientIp(req);
+  const n = capByIp.get(ip) || 0;
+  if (n >= 40 || capChallenges.size >= CAP.maxPending) return json(res, 429, { error: 'Too many requests' });
+  capByIp.set(ip, n + 1);
+  const token = crypto.randomBytes(25).toString('hex');
+  const expires = Date.now() + CAP.challengeMs;
+  capChallenges.set(token, expires);
+  return json(res, 200, { challenge: { c: CAP.c, s: CAP.s, d: CAP.d }, token, expires });
+}
+async function handleCapRedeem(req, res) {
+  if (!okOrigin(req.headers.origin)) return json(res, 403, { success: false });
+  let b;
+  try { b = JSON.parse((await readBodyBuf(req, 4 * 1024)).toString('utf8')); } catch { return json(res, 400, { success: false }); }
+  const token = typeof b?.token === 'string' ? b.token : '';
+  const sol = b?.solutions;
+  const exp = capChallenges.get(token);
+  capChallenges.delete(token);   // one attempt per challenge
+  if (!exp || exp < Date.now()) return json(res, 400, { success: false, error: 'Challenge invalid or expired' });
+  if (!Array.isArray(sol) || sol.length !== CAP.c || !sol.every((x) => Number.isSafeInteger(x) && x >= 0)) {
+    return json(res, 400, { success: false, error: 'Invalid body' });
+  }
+  for (let i = 1; i <= CAP.c; i++) {
+    const salt = capPrng(`${token}${i}`, CAP.s);
+    const target = capPrng(`${token}${i}d`, CAP.d);
+    if (!sha256hex(salt + sol[i - 1]).startsWith(target)) return json(res, 400, { success: false, error: 'Invalid solution' });
+  }
+  const id = crypto.randomBytes(8).toString('hex');
+  const secret = crypto.randomBytes(15).toString('hex');
+  const expires = Date.now() + CAP.tokenMs;
+  if (capTokens.size < CAP.maxPending) capTokens.set(`${id}:${sha256hex(secret)}`, expires);
+  return json(res, 200, { success: true, token: `${id}:${secret}`, expires });
+}
+// Single use: a valid token is spent by the request that presents it.
+function capSpend(token) {
+  if (typeof token !== 'string' || token.length > 100) return false;
+  const [id, secret] = token.split(':');
+  if (!id || !secret) return false;
+  const key = `${id}:${sha256hex(secret)}`;
+  const exp = capTokens.get(key);
+  capTokens.delete(key);
+  return !!exp && exp > Date.now();
+}
+
+// ---------- abuse reports (POST /h/report) ----------
+// Anyone may report a room by its 7-digit code. The relay turns the code into
+// the room id (the same HKDF as the app), keeps the report for the admin panel
+// to collect, and stores nothing about the reporter but what they typed.
+const REPORTS_FILE = path.join(STORE, 'reports.jsonl');
+const REPORT_REASONS = new Set(['abuse', 'csam', 'terror', 'fraud', 'threat', 'spam', 'other']);
+let reportBudget = 60;
+setInterval(() => { reportBudget = 60; }, 3600000);
+const reportByIp = new Map();
+setInterval(() => reportByIp.clear(), 3600000);
+function roomIdForCode(code) {
+  return Buffer.from(crypto.hkdfSync('sha256', `najva/room/${code}`, Buffer.alloc(32), 'wn1/room-id', 16)).toString('base64url');
+}
+async function handleReport(req, res) {
+  if (!okOrigin(req.headers.origin)) return json(res, 403, {});
+  const ip = clientIp(req);
+  const n = reportByIp.get(ip) || 0;
+  if (--reportBudget < 0 || n >= 5) return json(res, 429, {});
+  reportByIp.set(ip, n + 1);
+  try {
+    const b = JSON.parse((await readBodyBuf(req, 8 * 1024)).toString('utf8'));
+    const code = String(b.code || '').replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d));
+    if (!/^\d{7}$/.test(code) || !REPORT_REASONS.has(b.reason)) return json(res, 400, {});
+    if (!capSpend(b.cap)) return json(res, 403, { error: 'captcha' });   // proof-of-work CAPTCHA
+    const st = await fsp.stat(REPORTS_FILE).catch(() => null);
+    if (st && st.size > 5 * 1024 * 1024) return json(res, 507, {});
+    const rec = {
+      id: crypto.randomBytes(9).toString('base64url'), ts: Date.now(), code, room: roomIdForCode(code),
+      reason: b.reason, text: String(b.text || '').slice(0, 2000), contact: String(b.contact || '').slice(0, 200),
+    };
+    await fsp.appendFile(REPORTS_FILE, `${JSON.stringify(rec)}\n`);
+    return json(res, 200, { ok: true, ref: rec.id });
+  } catch {
+    return json(res, 400, {});
+  }
+}
+
 const server = http.createServer((req, res) => {
+  if (ipIsBlocked(clientIp(req))) return json(res, 403, { error: 'blocked' });
+  if (req.method === 'POST' && req.url === '/h/cap/challenge') return handleCapChallenge(req, res);
+  if (req.method === 'POST' && req.url === '/h/cap/redeem') return handleCapRedeem(req, res);
+  if (req.method === 'POST' && req.url === '/h/report') return handleReport(req, res);
   if (req.method === 'POST' && req.url === '/h/music') return handleMusicFetch(req, res);
+  // GET /h/room?id=<roomId>: does this room exist? Lets the join form say so
+  // before asking for the password. Without a creation password every code
+  // may be joined (joining opens it), so the answer is always yes.
+  if (req.method === 'GET' && req.url.startsWith('/h/room?')) {
+    if (--storeBudget < 0) return json(res, 429, {});
+    const id = new URL(req.url, 'http://x').searchParams.get('id') || '';
+    if (!ROOM_RE.test(id)) return json(res, 400, {});
+    return json(res, 200, { exists: !CREATE_KEY_HASH || !!rooms.get(id)?.size || roomKnown(id) });
+  }
   if (req.url.startsWith('/h/')) return handleStore(req, res);
   if (req.method === 'POST' && req.url === '/preview') return handlePreview(req, res);
   if (req.method === 'POST' && req.url === '/gif/search') return handleGifSearch(req, res);
@@ -919,7 +1210,12 @@ server.on('upgrade', (req, socket, head) => {
     return socket.destroy();
   }
   const fresh = url.searchParams.get('new') === '1';
-  wss.handleUpgrade(req, socket, head, (ws) => { onConnection(ws, room, cid, fresh).catch(() => ws.terminate()); });
+  const createKey = url.searchParams.get('ck') || '';
+  const meta = clientMeta(req);
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    if (ipIsBlocked(meta.ip)) { send(ws, { t: 'blocked' }); return ws.close(4013, 'blocked'); }
+    onConnection(ws, room, cid, fresh, createKey, meta).catch(() => ws.terminate());
+  });
 });
 
 // Up to MAX_PEERS devices share a room (e.g. two phones and a laptop). Every
@@ -933,11 +1229,17 @@ function peerById(set, id) {
   return null;
 }
 
-async function onConnection(ws, roomId, cid, fresh) {
+async function onConnection(ws, roomId, cid, fresh, createKey = '', meta = {}) {
   // Fetch ICE first: everything below must run without yielding so the
   // welcome and peer notices stay in order.
   const ice = await iceServers();
   if (ws.readyState !== ws.OPEN) return;
+  // Suspended by the admin (legal order or abuse): nobody gets in.
+  if (roomFlags(roomId).suspend) {
+    connLog(roomId, 'refused', meta, { cid, why: 'suspended' });
+    send(ws, { t: 'suspended' });
+    return ws.close(4012, 'suspended');
+  }
   // New rooms can be switched off from the admin panel.
   if (fresh && !feature('newRooms')) {
     send(ws, { t: 'closed' });
@@ -952,6 +1254,23 @@ async function onConnection(ws, roomId, cid, fresh) {
   if (fresh && !rooms.get(roomId)?.size && fs.existsSync(path.join(ROOMS_DIR, roomId, 'auth'))) {
     send(ws, { t: 'taken' });
     return ws.close(4002, 'taken');
+  }
+  if (CREATE_KEY_HASH && !rooms.get(roomId)?.size && !roomKnown(roomId)) {
+    // A room that does not exist yet: only the creation password opens it.
+    if (!fresh) {
+      send(ws, { t: 'noroom' });
+      return ws.close(4011, 'noroom');
+    }
+    if (!createKeyOk(createKey)) {
+      send(ws, { t: 'badkey' });
+      return ws.close(4004, 'badkey');
+    }
+    let roomsNow = 0;
+    try { roomsNow = fs.readdirSync(ROOMS_DIR).length; } catch {}
+    if (roomsNow >= MAX_STORE_ROOMS) return ws.close(1013, 'busy');
+    fs.mkdirSync(path.join(ROOMS_DIR, roomId, 'log'), { recursive: true });
+    fs.mkdirSync(path.join(ROOMS_DIR, roomId, 'blob'), { recursive: true });
+    fs.writeFileSync(path.join(ROOMS_DIR, roomId, 'created'), '');
   }
   let set = rooms.get(roomId);
   if (!set) {
@@ -981,7 +1300,9 @@ async function onConnection(ws, roomId, cid, fresh) {
   for (const o of set) send(o, { t: 'peer-joined', id: cid });
   set.add(ws);
   const features = { gif: feature('gif'), preview: feature('preview'), calls: feature('calls') };
-  send(ws, { t: 'welcome', ice: features.calls ? ice : [], features, peers: [...set].filter((s) => s !== ws).map((s) => s.cid), ver: appVersion });
+  send(ws, { t: 'welcome', ice: features.calls ? ice : [], features, peers: [...set].filter((s) => s !== ws).map((s) => s.cid), ver: appVersion, notice: activeNotice() });
+  const joinedAt = Date.now();
+  connLog(roomId, fresh ? 'create' : 'join', meta, { cid });
 
   ws.on('pong', () => { ws.alive = true; });
 
@@ -1018,7 +1339,8 @@ async function onConnection(ws, roomId, cid, fresh) {
     peer.send(JSON.stringify(msg));
   });
 
-  ws.on('close', () => {
+  ws.on('close', (code) => {
+    connLog(roomId, 'leave', meta, { cid, secs: Math.round((Date.now() - joinedAt) / 1000), code });
     if (ws.replaced) return;
     set.delete(ws);
     for (const o of set) send(o, { t: 'peer-left', id: cid });
@@ -1071,6 +1393,81 @@ function applySettings(next) {
 try { applySettings(JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'))); } catch { applySettings({}); }
 const feature = (k) => settings.features[k] !== false;
 
+// A service notice from the admin, shown in every open app (and to each one
+// that connects) until it is cleared or its time runs out.
+const NOTICE_FILE = path.join(STORE, 'notice.json');
+let notice = null; // {text, level, until}
+try { notice = JSON.parse(fs.readFileSync(NOTICE_FILE, 'utf8')); } catch {}
+function activeNotice() {
+  if (!notice || !notice.text || (notice.until && notice.until < Date.now())) return null;
+  return { text: notice.text, level: notice.level, until: notice.until || 0 };
+}
+
+const HELD_RE = /^(\d{13})-(\d{13}-[A-Za-z0-9_-]{8,32}-\d{1,13}-[01]\.json)$/;
+async function blobInfo(p) {
+  const chunks = (await fsp.readdir(p).catch(() => [])).filter((n) => /^\d{1,4}$/.test(n));
+  return { chunks: chunks.length, size: await dirSize(p) };
+}
+// Everything the store knows about one room, without content: entry times,
+// ids, sizes, timers, retired (held) entries, flags and the connection log.
+async function roomMeta(id) {
+  const dir = path.join(ROOMS_DIR, id);
+  if (!(await fsp.stat(dir).catch(() => null))) return null;
+  const auth = await fsp.stat(path.join(dir, 'auth')).catch(() => null);
+  const made = await fsp.stat(path.join(dir, 'created')).catch(() => null);
+  const entries = [];
+  for (const e of (await listEntries(dir)).sort((a, b) => a.ts - b.ts)) {
+    const st = await fsp.stat(path.join(dir, 'log', e.name)).catch(() => null);
+    const b = e.blob ? await blobInfo(path.join(dir, 'blob', e.id)) : { chunks: 0, size: 0 };
+    entries.push({ name: e.name, ts: e.ts, id: e.id, exp: e.exp, blob: e.blob, size: (st ? st.size : 0) + b.size, chunks: b.chunks });
+  }
+  const held = [];
+  for (const n of (await fsp.readdir(path.join(dir, 'held', 'log')).catch(() => [])).sort()) {
+    const m = HELD_RE.exec(n);
+    const e = m && parseEntry(m[2]);
+    if (!e) continue;
+    const st = await fsp.stat(path.join(dir, 'held', 'log', n)).catch(() => null);
+    const b = e.blob ? await blobInfo(path.join(dir, 'held', 'blob', e.id)) : { chunks: 0, size: 0 };
+    held.push({ name: n, retired: Number(m[1]), ts: e.ts, id: e.id, exp: e.exp, blob: e.blob, size: (st ? st.size : 0) + b.size, chunks: b.chunks });
+  }
+  const conn = [];
+  const raw = await fsp.readFile(path.join(dir, 'conn.log'), 'utf8').catch(() => '');
+  for (const line of raw.split('\n')) { if (!line) continue; try { conn.push(JSON.parse(line)); } catch {} }
+  const live = [...(rooms.get(id) || [])].map((s) => s.cid);
+  return {
+    id, registered: auth ? Math.round(auth.mtimeMs) : null, created: made ? Math.round(made.mtimeMs) : (auth ? Math.round(auth.mtimeMs) : null),
+    flags: roomFlags(id), entries, held, conn, live, bytes: await dirSize(dir),
+  };
+}
+// Raw stored file (ciphertext) for a disclosure export; only these shapes.
+const FILE_RE = /^(log\/\d{13}-[A-Za-z0-9_-]{8,32}-\d{1,13}-[01]\.json|held\/log\/\d{13}-\d{13}-[A-Za-z0-9_-]{8,32}-\d{1,13}-[01]\.json|(held\/)?blob\/[A-Za-z0-9_-]{8,32}\/\d{1,4})$/;
+
+async function setFlags(id, body) {
+  const dir = path.join(ROOMS_DIR, id);
+  // A flag may be put on a room that has nothing stored yet (for instance one
+  // that is only live): its directory is opened so the flag can live there.
+  if (!(await fsp.stat(dir).catch(() => null))) {
+    await fsp.mkdir(path.join(dir, 'log'), { recursive: true });
+    await fsp.mkdir(path.join(dir, 'blob'), { recursive: true });
+    await fsp.writeFile(path.join(dir, 'created'), '');
+  }
+  for (const k of FLAG_KEYS) {
+    if (!(k in body)) continue;
+    const file = path.join(dir, `${k}.flag`);
+    const v = body[k];
+    if (v && typeof v === 'object') {
+      const rec = { case: String(v.case || '').slice(0, 60), by: String(v.by || '').slice(0, 120), since: Date.now(), reason: String(v.reason || '').slice(0, 300) };
+      if (k === 'watch') rec.until = Math.min(Number(v.until) || 0, Date.now() + 90 * 86400000) || Date.now() + 30 * 86400000;
+      await writeAtomic(file, JSON.stringify(rec));
+    } else {
+      await fsp.rm(file, { force: true });
+    }
+  }
+  flagCache.delete(id);
+  if (body.suspend) dropLive(id, 4012, 'suspended');
+  return roomFlags(id);
+}
+
 async function roomReport() {
   const out = new Map();
   for (const id of await fsp.readdir(ROOMS_DIR).catch(() => [])) {
@@ -1078,15 +1475,17 @@ async function roomReport() {
     const dir = path.join(ROOMS_DIR, id);
     const entries = await listEntries(dir);
     const st = await fsp.stat(path.join(dir, 'auth')).catch(() => null);
+    const made = st || await fsp.stat(path.join(dir, 'created')).catch(() => null);
     out.set(id, {
       id, bytes: await dirSize(dir), items: entries.length, files: entries.filter((e) => e.blob).length,
-      created: st ? Math.round(st.mtimeMs) : null,
+      created: made ? Math.round(made.mtimeMs) : null,
       lastActivity: entries.reduce((m, e) => Math.max(m, e.ts), st ? Math.round(st.mtimeMs) : 0) || null,
-      online: 0, stored: true,
+      online: 0, stored: true, flags: roomFlags(id),
+      held: (await fsp.readdir(path.join(dir, 'held', 'log')).catch(() => [])).length,
     });
   }
   for (const [id, set] of rooms) {
-    const r = out.get(id) || { id, bytes: 0, items: 0, files: 0, created: null, lastActivity: null, online: 0, stored: false };
+    const r = out.get(id) || { id, bytes: 0, items: 0, files: 0, created: null, lastActivity: null, online: 0, stored: false, flags: {}, held: 0 };
     r.online = set.size;
     out.set(id, r);
   }
@@ -1118,15 +1517,65 @@ function handleAdmin(req, res) {
       });
     }
     if (req.method === 'GET' && url.pathname === '/settings') return json(res, 200, settings);
-    const body = req.method === 'POST' ? JSON.parse((await readBodyBuf(req, 16 * 1024)).toString('utf8') || '{}') : {};
+    if (req.method === 'GET' && url.pathname === '/rooms/meta') {
+      const id = url.searchParams.get('id') || '';
+      if (!ROOM_RE.test(id)) return json(res, 400, {});
+      const meta = await roomMeta(id);
+      return meta ? json(res, 200, meta) : json(res, 404, {});
+    }
+    if (req.method === 'GET' && url.pathname === '/rooms/file') {
+      const id = url.searchParams.get('id') || '';
+      const p = url.searchParams.get('p') || '';
+      if (!ROOM_RE.test(id) || !FILE_RE.test(p)) return json(res, 400, {});
+      const data = await fsp.readFile(path.join(ROOMS_DIR, id, ...p.split('/'))).catch(() => null);
+      if (!data) return json(res, 404, {});
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': data.length, 'Cache-Control': 'no-store' });
+      return res.end(data);
+    }
+    if (req.method === 'GET' && url.pathname === '/blocks') return json(res, 200, { blocks });
+    if (req.method === 'GET' && url.pathname === '/notice') return json(res, 200, { notice: activeNotice() });
+    if (req.method === 'GET' && url.pathname === '/reports') {
+      const raw = await fsp.readFile(REPORTS_FILE, 'utf8').catch(() => '');
+      const reports = [];
+      for (const line of raw.split('\n')) { if (!line) continue; try { reports.push(JSON.parse(line)); } catch {} }
+      return json(res, 200, { reports });
+    }
+    const body = req.method === 'POST' ? JSON.parse((await readBodyBuf(req, 512 * 1024)).toString('utf8') || '{}') : {};
     if (req.method === 'POST' && url.pathname === '/settings') {
       applySettings(body);
       await writeAtomic(SETTINGS_FILE, JSON.stringify(settings));
       setImmediate(janitor);
       return json(res, 200, settings);
     }
+    if (req.method === 'POST' && url.pathname === '/rooms/flags' && ROOM_RE.test(body.id || '')) {
+      return json(res, 200, { flags: await setFlags(body.id, body) });
+    }
+    if (req.method === 'POST' && url.pathname === '/blocks') {
+      applyBlocks(body.blocks);
+      await writeAtomic(BLOCKS_FILE, JSON.stringify(blocks));
+      return json(res, 200, { blocks });
+    }
+    if (req.method === 'POST' && url.pathname === '/notice') {
+      const text = String(body.text || '').trim().slice(0, 500);
+      notice = text ? { text, level: ['info', 'warn', 'alert'].includes(body.level) ? body.level : 'info', until: Number(body.until) || 0 } : null;
+      await writeAtomic(NOTICE_FILE, JSON.stringify(notice));
+      const n = activeNotice();
+      for (const ws of wss.clients) send(ws, { t: 'notice', notice: n });
+      return json(res, 200, { notice: n, sent: wss.clients.size });
+    }
+    if (req.method === 'POST' && url.pathname === '/reports/ack') {
+      // The panel has copied these reports into its own database: drop them here.
+      const done = new Set((Array.isArray(body.ids) ? body.ids : []).map(String));
+      const raw = await fsp.readFile(REPORTS_FILE, 'utf8').catch(() => '');
+      const keep = raw.split('\n').filter((line) => { if (!line) return false; try { return !done.has(JSON.parse(line).id); } catch { return false; } });
+      await writeAtomic(REPORTS_FILE, keep.length ? `${keep.join('\n')}\n` : '');
+      return json(res, 200, { left: keep.length });
+    }
     if (req.method === 'POST' && url.pathname === '/rooms/delete' && ROOM_RE.test(body.id || '')) {
+      // Never while a legal hold is on: release it first (a deliberate step).
+      if (roomFlags(body.id).hold) return json(res, 409, { error: 'held' });
       const kicked = dropLive(body.id, 4009, 'deleted');
+      flagCache.delete(body.id);
       await fsp.rm(path.join(ROOMS_DIR, body.id), { recursive: true, force: true });
       setImmediate(janitor);
       return json(res, 200, { kicked });

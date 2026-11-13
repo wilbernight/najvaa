@@ -44,6 +44,9 @@ class NovaServiceProvider extends NovaApplicationServiceProvider
         // Sections stay open; the badges are cheap counts on the panel's own
         // SQLite mirror (no calls to the relay or Cloudflare per page view).
         Nova::mainMenu(fn (Request $request) => [
+            MenuSection::make('پنل مدیریت', [
+                MenuItem::externalLink('بازگشت به پنل مدیریت', url('/')),
+            ])->icon('arrow-uturn-right'),
             MenuSection::dashboard(Main::class)->icon('chart-bar'),
 
             MenuSection::make('چت', [
@@ -69,6 +72,7 @@ class NovaServiceProvider extends NovaApplicationServiceProvider
         ]);
 
         Nova::userMenu(fn (Request $request, Menu $menu) => $menu->prepend([
+            MenuItem::externalLink('پنل مدیریت', url('/')),
             MenuItem::link('حساب من و امنیت ورود', '/user-security'),
             MenuItem::link('گزارش امنیتی', '/resources/admin-logs'),
         ]));

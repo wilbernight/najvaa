@@ -1,3 +1,16 @@
+# The page itself revalidates on every open (a 304 when unchanged). It loads
+# app.js and style.css as ?v=<release>, so those URLs never change content and
+# are kept for a year; a release changes the URL. (Cloudflare replaces a
+# no-cache on js/css with its own 4-hour TTL, so the unversioned paths stay
+# no-store.) The font never changes - rename it if it ever does. Everything
+# else, API and history included, is no-store.
+map $request_uri $najva_cache {
+    default                                      "no-store";
+    "~^/(index\.html)?(\?|$)"                     "no-cache";
+    "~^/(app\.js|style\.css)\?v=[0-9][0-9.-]*$"    "public, max-age=31536000, immutable";
+    "/fonts/Vazirmatn.woff2"                     "public, max-age=31536000, immutable";
+}
+
 map $http_upgrade $najva_connection_upgrade {
     default upgrade;
     ''      close;
@@ -7,9 +20,9 @@ map $http_upgrade $najva_connection_upgrade {
 server {
     listen 80;
     listen [::]:80;
-    server_name najvaa.xyz www.najvaa.xyz;
+    server_name najvaa.xyz www.najvaa.xyz app.najvaa.xyz;
     access_log off;
-    return 301 https://najvaa.xyz$request_uri;
+    return 301 https://$host$request_uri;
 }
 
 server {
@@ -17,7 +30,8 @@ server {
     listen [::]:443 ssl;
     http2 on;
     include snippets/najvaa-origin.conf;
-    server_name najvaa.xyz;
+    # app.najvaa.xyz: the same chat on a subdomain, for networks that filter the bare najvaa.xyz name.
+    server_name najvaa.xyz app.najvaa.xyz;
 
     root /var/www/najvaa.xyz/public;
     index index.html;
@@ -28,7 +42,7 @@ server {
     server_tokens off;
     client_max_body_size 1M;
 
-    add_header Content-Security-Policy "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' wss://najvaa.xyz; worker-src 'self' blob:; font-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" always;
+    add_header Content-Security-Policy "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' wss://najvaa.xyz wss://app.najvaa.xyz; worker-src 'self' blob:; font-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" always;
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "DENY" always;
@@ -38,7 +52,7 @@ server {
     # Cross-origin isolation: lets the on-device AI voice use several threads.
     add_header Cross-Origin-Embedder-Policy "require-corp" always;
     add_header Cross-Origin-Resource-Policy "same-origin" always;
-    add_header Cache-Control "no-store" always;
+    add_header Cache-Control $najva_cache always;
 
     location = /ws {
         proxy_pass http://127.0.0.1:8787;
@@ -141,6 +155,24 @@ server {
         add_header X-Content-Type-Options "nosniff" always;
         add_header Cross-Origin-Resource-Policy "same-origin" always;
         add_header Cross-Origin-Embedder-Policy "require-corp" always;
+        try_files $uri =404;
+    }
+
+    # Animated emoji (built by chat/emoji-src, uploaded separately). Not a
+    # versioned path, so a week for the images and an hour for the index.
+    location ^~ /emoji/ {
+        gzip_types application/json;
+        add_header Cache-Control "public, max-age=604800" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Cross-Origin-Resource-Policy "same-origin" always;
+        location = /emoji/index.json {
+            add_header Cache-Control "public, max-age=3600" always;
+            add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+            add_header X-Content-Type-Options "nosniff" always;
+            add_header Cross-Origin-Resource-Policy "same-origin" always;
+            try_files $uri =404;
+        }
         try_files $uri =404;
     }
 

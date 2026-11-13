@@ -27,6 +27,22 @@ class User extends Authenticatable implements PasskeyUser
         'password',
     ];
 
+    /** Listed in NAJVA_ADMINS: nobody else gets into the panel at all. */
+    public function isPanelAdmin(): bool
+    {
+        return in_array(strtolower((string) $this->email), config('najva.admins'), true);
+    }
+
+    public function roleLabel(): string
+    {
+        return \App\Support\Perm::label($this->role);
+    }
+
+    public function hasSecondFactor(): bool
+    {
+        return filled($this->two_factor_confirmed_at) || $this->passkeys()->exists();
+    }
+
     /**
      * The attributes that should be hidden for serialization.
      *
@@ -50,6 +66,7 @@ class User extends Authenticatable implements PasskeyUser
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'two_factor_confirmed_at' => 'datetime',
+            'last_login_at' => 'datetime',
         ];
     }
 }

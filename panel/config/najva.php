@@ -37,4 +37,20 @@ return [
 
     // How long the dashboard keeps its own storage-size history.
     'metrics_days' => (int) env('NAJVA_METRICS_DAYS', 120),
+
+    // Panel session hardening (see PanelSession / RequireStepUp).
+    'idle_minutes' => (int) env('NAJVA_IDLE_MINUTES', 15),
+    'bind_ip' => (bool) env('NAJVA_BIND_IP', true),
+    'stepup_minutes' => (int) env('NAJVA_STEPUP_MINUTES', 5),
+
+    // Disclosure packages: kept this many days, then deleted; size limit
+    // when the stored ciphertext is included.
+    'export_days' => (int) env('NAJVA_EXPORT_DAYS', 7),
+    'export_max_mb' => (int) env('NAJVA_EXPORT_MAX_MB', 2048),
+
+    // Longest a connection watch may run (days); the relay caps it at 90.
+    'watch_max_days' => (int) env('NAJVA_WATCH_MAX_DAYS', 90),
+
+    // Display time zone for Jalali dates.
+    'timezone' => env('NAJVA_TIMEZONE', 'Asia/Tehran'),
 ];

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="512" height="512">
+  <!-- Najva "Nun-e Najva": the letter ن as one stroke (the taller right arm is where
+       the letter starts), its dot in the bowl, and two smaller dots drifting up and
+       away: a whisper. Same grid and weights as Panah's arch (40u, stroke 3.2 round,
+       dot r 2.1) so the family reads as one. -->
+  <rect width="40" height="40" rx="9.2" fill="#45D6C8"/>
+  <path d="M28.6 11.4V20.4C28.6 25.6 24.9 29.2 20.2 29.2C15.5 29.2 11.8 25.6 11.8 20.9" fill="none" stroke="#06201D" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="20.2" cy="20.6" r="2.1" fill="#06201D"/>
+  <circle cx="15.6" cy="14.6" r="1.6" fill="#06201D"/>
+  <circle cx="12.4" cy="10.6" r="1.15" fill="#06201D"/>
+</svg>

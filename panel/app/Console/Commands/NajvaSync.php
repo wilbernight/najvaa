@@ -2,7 +2,11 @@
 
 namespace App\Console\Commands;
 
+use App\Models\AbuseReport;
+use App\Models\AdminLog;
+use App\Models\DisclosureExport;
 use App\Models\Metric;
+use Illuminate\Support\Facades\Storage;
 use App\Models\PanelSetting;
 use App\Models\Room;
 use App\Models\ServiceCheck;
@@ -34,10 +38,14 @@ class NajvaSync extends Command
             $seen = [];
             foreach ($stats['rooms'] ?? [] as $r) {
                 $seen[] = $r['id'];
+                $flags = $r['flags'] ?? [];
                 Room::query()->updateOrCreate(['room_id' => $r['id']], [
                     'bytes' => $r['bytes'], 'items' => $r['items'], 'files' => $r['files'],
                     'online' => $r['online'], 'stored' => $r['stored'],
                     'remote_created_at' => $ts($r['created']), 'last_activity_at' => $ts($r['lastActivity']),
+                    'hold' => ! empty($flags['hold']), 'suspended' => ! empty($flags['suspend']),
+                    'watch_until' => ! empty($flags['watch']) ? $ts($flags['watch']['until'] ?? null) : null,
+                    'held_items' => (int) ($r['held'] ?? 0), 'flags' => $flags ?: null,
                 ]);
             }
             Room::query()->whereNotIn('room_id', $seen)->delete();
@@ -66,6 +74,50 @@ class NajvaSync extends Command
         ServiceCheck::report('relay', 'سرویس چت (رله)', 'ok',
             'روشن از '.round($stats['uptime'] / 3600, 1).' ساعت پیش · '.round($stats['rss'] / 1048576).' مگ حافظه');
 
+        $this->pullReports($relay);
+        $this->purgeExports();
+
         return self::SUCCESS;
+    }
+
+    /** Copies new abuse reports into the panel (encrypted), then drops them from the relay. */
+    private function pullReports(Relay $relay): void
+    {
+        try {
+            $list = $relay->reports();
+        } catch (Throwable) {
+            return;
+        }
+        $done = [];
+        foreach ($list as $r) {
+            if (! is_string($r['id'] ?? null) || ! preg_match('/^[A-Za-z0-9_-]{8,20}$/', $r['id'])) {
+                continue;
+            }
+            AbuseReport::query()->firstOrCreate(['remote_id' => $r['id']], [
+                'room_id' => (string) ($r['room'] ?? ''), 'code' => (string) ($r['code'] ?? ''),
+                'reason' => array_key_exists($r['reason'] ?? '', AbuseReport::REASONS) ? $r['reason'] : 'other',
+                'body' => (string) ($r['text'] ?? ''), 'contact' => (string) ($r['contact'] ?? ''),
+                'received_at' => Carbon::createFromTimestampMs((int) ($r['ts'] ?? 0) ?: now()->getTimestampMs()),
+            ]);
+            $done[] = $r['id'];
+        }
+        if ($done) {
+            try {
+                $relay->ackReports($done);
+            } catch (Throwable) {
+                // collected again next minute; firstOrCreate keeps it single
+            }
+        }
+    }
+
+    /** Disclosure packages are deleted once their time is up. */
+    private function purgeExports(): void
+    {
+        DisclosureExport::query()->whereNull('purged_at')->whereNotNull('file')->where('expires_at', '<', now())
+            ->each(function (DisclosureExport $x) {
+                Storage::disk('local')->delete($x->file);
+                $x->update(['purged_at' => now()]);
+                AdminLog::record('export.purged', (string) $x->id, ['sha256' => $x->sha256], null, 'system');
+            });
     }
 }

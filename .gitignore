@@ -18,3 +18,15 @@ panel/storage/framework/views/*
 Thumbs.db
 # animated emoji: built by chat/emoji-src/build_emoji.py, deployed separately
 chat/public/emoji/
+# android / gradle
+android/.gradle/
+android/.kotlin/
+android/.idea/
+android/local.properties
+android/build/
+android/app/build/
+*.apk
+*.aab
+# local tooling and Laravel runtime cache
+.serena/
+panel/bootstrap/cache/*.php
