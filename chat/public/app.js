@@ -889,7 +889,7 @@ function createEntry({ id, dir, ttl: life, kind, snippet, from, ts }) {
     clearTimeout(li._reveal);
     const on = !li.classList.contains('reveal');
     li.classList.toggle('reveal', on);
-    if (on) unveilDone(li); else if (!li.classList.contains('peek')) clearUnveiled(li);
+    if (on) unveilSand(li); else if (!li.classList.contains('peek')) clearUnveiled(li);
     eye.firstChild.querySelector('use').setAttribute('href', on ? '#i-eye-off' : '#i-eye');
     if (on) li._reveal = setTimeout(() => { li.classList.remove('reveal'); if (!li.classList.contains('peek')) clearUnveiled(li); eye.firstChild.querySelector('use').setAttribute('href', '#i-eye'); }, 10000);
   };
@@ -4553,47 +4553,78 @@ function applyVeil() {
   $('veil-switch').classList.toggle('on', veilOn);
 }
 const UNVEIL_SEL = '.body, .ig-title, .music-title, .file-card .name, .quote-text, .edit-prev-text, .snip';
-// Once the unveil has run, the text switches to plain styles. Chrome does not
-// always repaint the last frame of the animation, which left the part farthest
-// from the finger (often the start of the message) still dotted.
-// Where the unveil starts and how it runs (see "unveil" in style.css): from
-// the finger, or the middle of each line. As Telegram (SpoilerEffect.startRipple)
-// the radius is the block's diagonal, the reveal is linear and lasts radius x
-// 0.3 ms in device pixels, kept between 250 and 550 ms. The text stays under an
-// opaque cover in the exact colour behind it until the circle reaches it.
-function setUnveil(m, cx, cy) {
-  for (const t of m.querySelectorAll(UNVEIL_SEL)) {
-    const r = t.getBoundingClientRect();
-    const x = cx == null ? r.width / 2 : cx - r.left, y = cy == null ? r.height / 2 : cy - r.top;
-    const rad = Math.hypot(r.width, r.height);
-    t.style.setProperty('--px', `${Math.round(x)}px`);
-    t.style.setProperty('--py', `${Math.round(y)}px`);
-    t.style.setProperty('--rmax', `${Math.round(rad)}px`);
-    t.style.setProperty('--rdur', `${Math.round(Math.min(550, Math.max(250, rad * devicePixelRatio * 0.3)))}ms`);
-    t.style.setProperty('--cover', colourBehind(t));
+// Sand unveil (as dissolve.rselmi.com/#/sand): the veil's dots turn into
+// grains that pour down with gravity and fall out of the bubble, in a wave
+// that spreads from the finger (or the middle on hover), while the text fades
+// in under them. One fixed canvas over the page draws every grain and sleeps
+// once none are left. The text switches to plain styles (.unveiled) at once.
+const sand = { cv: null, ctx: null, g: [], raf: 0, last: 0, w: 0, h: 0 };
+const SAND_ALPHA = [0.35, 0.5, 0.65, 0.8, 0.95];
+function sandCtx() {
+  if (!sand.cv) {
+    sand.cv = document.createElement('canvas');
+    sand.cv.className = 'sand-layer';
+    sand.cv.setAttribute('aria-hidden', 'true');
+    document.body.append(sand.cv);
+    sand.ctx = sand.cv.getContext('2d');
   }
+  const d = devicePixelRatio || 1, w = innerWidth, h = innerHeight;
+  if (w !== sand.w || h !== sand.h || sand.cv.width !== Math.round(w * d)) {
+    sand.w = w; sand.h = h;
+    sand.cv.width = Math.round(w * d); sand.cv.height = Math.round(h * d);
+  }
+  sand.ctx.setTransform(d, 0, 0, d, 0, 0);
+  return sand.ctx;
 }
-// The solid colour a line of text sits on: its nearest opaque background with
-// every translucent one between (a quote box, a reply tint) laid over it.
-function colourBehind(node) {
-  const layers = [];
-  for (let n = node; n && n.nodeType === 1; n = n.parentElement) {
-    const bg = getComputedStyle(n).backgroundColor;
-    const c = bg.match(/[\d.]+/g)?.map(Number);
-    if (c && bg.startsWith('color(srgb')) for (let i = 0; i < 3; i++) c[i] *= 255;
-    if (!c || (c.length > 3 && c[3] === 0)) continue;
-    layers.push(c);
-    if (c.length === 3 || c[3] >= 1) break;
-  }
-  let [r, g, b] = layers.length && (layers.at(-1).length === 3 || layers.at(-1)[3] >= 1) ? layers.pop() : [18, 18, 18];
-  for (const c of layers.reverse()) { const a = c[3]; r = r * (1 - a) + c[0] * a; g = g * (1 - a) + c[1] * a; b = b * (1 - a) + c[2] * a; }
-  return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
-}
-function unveilDone(m) {
+function unveilSand(m, cx, cy) {
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
   for (const t of m.querySelectorAll(UNVEIL_SEL)) {
-    if (t.classList.contains('unveiled') || t._unveil) continue;
-    t._unveil = setTimeout(() => { t._unveil = 0; t.classList.add('unveiled'); }, (parseInt(t.style.getPropertyValue('--rdur')) || 400) + 40);
+    if (t.classList.contains('unveiled')) continue;
+    t.classList.add('unveiled');
+    if (still) continue;
+    const rg = document.createRange();
+    rg.selectNodeContents(t);
+    const rects = [...rg.getClientRects()].filter((r) => r.width > 1 && r.height > 1 && r.bottom > 0 && r.top < innerHeight);
+    if (!rects.length) continue;
+    const c = t.closest('.msg.out:not(.gif):not(.big-emoji)') ? '#ffffff' : '#a3a9b3';
+    const box = t.getBoundingClientRect();
+    const ox = cx ?? box.left + box.width / 2, oy = cy ?? box.top + box.height / 2;
+    const span = Math.hypot(box.width, box.height) || 1;
+    for (const r of rects) {
+      const n = Math.min(900, Math.round(r.width * r.height / 8));
+      for (let i = 0; i < n && sand.g.length < 7000; i++) {
+        const x = r.left + Math.random() * r.width, y = r.top + r.height * (0.12 + 0.76 * Math.random());
+        sand.g.push({
+          x, y, c,
+          vx: (Math.random() - 0.5) * 36, vy: -Math.random() * 24,
+          wait: Math.hypot(x - ox, y - oy) / span * 280 + Math.random() * 110,
+          a: SAND_ALPHA[(Math.random() * 5) | 0], s: 0.9 + Math.random() * 1.1, life: 0,
+        });
+      }
+    }
+    t.animate([{ opacity: 0 }, { opacity: 0, offset: 0.2 }, { opacity: 1 }], { duration: 560, easing: 'ease-out' });
   }
+  if (sand.g.length && !sand.raf) { sand.last = performance.now(); sand.raf = requestAnimationFrame(sandTick); }
+}
+function sandTick(now) {
+  const dt = Math.min(0.05, (now - sand.last) / 1000);
+  sand.last = now;
+  const ctx = sandCtx(), H = sand.h, g = sand.g;
+  ctx.clearRect(0, 0, sand.w, H);
+  let k = 0, fill = '';
+  for (const p of g) {
+    if (p.wait > 0) p.wait -= dt * 1000;
+    else { p.vy += 2100 * dt; p.vx *= 0.985; p.x += p.vx * dt; p.y += p.vy * dt; p.life += dt; }
+    const fade = 1 - p.life / 0.95;
+    if (fade <= 0 || p.y > H + 4) continue;
+    if (p.c !== fill) ctx.fillStyle = fill = p.c;
+    ctx.globalAlpha = p.a * Math.min(1, fade * 1.6);
+    ctx.fillRect(p.x - p.s / 2, p.y - p.s / 2, p.s, p.s);
+    g[k++] = p;
+  }
+  g.length = k;
+  ctx.globalAlpha = 1;
+  sand.raf = k ? requestAnimationFrame(sandTick) : 0;
 }
 function clearUnveiled(m) {
   for (const t of m.querySelectorAll(UNVEIL_SEL)) { clearTimeout(t._unveil); t._unveil = 0; t.classList.remove('unveiled'); }
@@ -4602,9 +4633,8 @@ function bindVeil() {
   $('messages').addEventListener('pointerdown', (e) => {
     const m = e.target.closest('.msg, .act');
     if (!m || !veilOn) return;
-    setUnveil(m, e.clientX, e.clientY);
     m.classList.add('peek');
-    unveilDone(m);
+    unveilSand(m, e.clientX, e.clientY);
   });
   // The Instagram post sheet: hold the picture or the text to see it.
   $('ig-modal').addEventListener('pointerdown', (e) => {
@@ -4619,8 +4649,7 @@ function bindVeil() {
   $('messages').addEventListener('mouseover', (e) => {
     const m = e.target.closest?.('.msg, .act');
     if (!m || !veilOn || m.contains(e.relatedTarget)) return;
-    if (!m.classList.contains('peek') && !m.classList.contains('reveal')) setUnveil(m); // a hover unveils from the middle
-    unveilDone(m);
+    unveilSand(m); // a hover unveils from the middle
   });
   window.addEventListener('pointerup', unpeek);
   window.addEventListener('pointercancel', unpeek);
@@ -5804,7 +5833,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-11-13.9';
+const APP_VERSION = '2026-11-16.1';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.
