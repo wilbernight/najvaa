@@ -4558,6 +4558,8 @@ const UNVEIL_SEL = '.body, .ig-title, .music-title, .file-card .name, .quote-tex
 // that spreads from the finger (or the middle on hover), while the text fades
 // in under them. One fixed canvas over the page draws every grain and sleeps
 // once none are left. The text switches to plain styles (.unveiled) at once.
+// Veiled pictures (GIFs, post and card thumbnails) pour away the same way.
+const SAND_IMG = '.gif-mini, .ig-thumb img, .stack-card img';
 const sand = { cv: null, ctx: null, g: [], raf: 0, last: 0, w: 0, h: 0 };
 const SAND_ALPHA = [0.35, 0.5, 0.65, 0.8, 0.95];
 function sandCtx() {
@@ -4578,22 +4580,23 @@ function sandCtx() {
 }
 function unveilSand(m, cx, cy) {
   const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  for (const t of m.querySelectorAll(UNVEIL_SEL)) {
+  for (const t of m.querySelectorAll(`${UNVEIL_SEL}, ${SAND_IMG}`)) {
     if (t.classList.contains('unveiled')) continue;
     t.classList.add('unveiled');
     if (still) continue;
+    const pic = t.tagName === 'IMG';
     const rg = document.createRange();
-    rg.selectNodeContents(t);
-    const rects = [...rg.getClientRects()].filter((r) => r.width > 1 && r.height > 1 && r.bottom > 0 && r.top < innerHeight);
+    if (!pic) rg.selectNodeContents(t);
+    const rects = [...(pic ? [t.getBoundingClientRect()] : rg.getClientRects())].filter((r) => r.width > 1 && r.height > 1 && r.bottom > 0 && r.top < innerHeight);
     if (!rects.length) continue;
     const c = t.closest('.msg.out:not(.gif):not(.big-emoji)') ? '#ffffff' : '#a3a9b3';
     const box = t.getBoundingClientRect();
     const ox = cx ?? box.left + box.width / 2, oy = cy ?? box.top + box.height / 2;
     const span = Math.hypot(box.width, box.height) || 1;
     for (const r of rects) {
-      const n = Math.min(900, Math.round(r.width * r.height / 8));
+      const n = Math.min(pic ? 2600 : 900, Math.round(r.width * r.height / (pic ? 14 : 8)));
       for (let i = 0; i < n && sand.g.length < 7000; i++) {
-        const x = r.left + Math.random() * r.width, y = r.top + r.height * (0.12 + 0.76 * Math.random());
+        const x = r.left + Math.random() * r.width, y = r.top + r.height * (pic ? Math.random() : 0.12 + 0.76 * Math.random());
         sand.g.push({
           x, y, c,
           vx: (Math.random() - 0.5) * 36, vy: -Math.random() * 24,
@@ -4627,7 +4630,7 @@ function sandTick(now) {
   sand.raf = k ? requestAnimationFrame(sandTick) : 0;
 }
 function clearUnveiled(m) {
-  for (const t of m.querySelectorAll(UNVEIL_SEL)) { clearTimeout(t._unveil); t._unveil = 0; t.classList.remove('unveiled'); }
+  for (const t of m.querySelectorAll(`${UNVEIL_SEL}, ${SAND_IMG}`)) { clearTimeout(t._unveil); t._unveil = 0; t.classList.remove('unveiled'); }
 }
 function bindVeil() {
   $('messages').addEventListener('pointerdown', (e) => {
@@ -5833,7 +5836,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-11-16.1';
+const APP_VERSION = '2026-11-16.2';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.
