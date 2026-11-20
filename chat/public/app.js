@@ -2879,6 +2879,19 @@ async function onChunk(buf) {
 // click) offers "keep".
 const TOUCH = matchMedia('(pointer: coarse)').matches;
 const VIEW_MS = { image: 10000, video: 10 * 60000 }; // videos: their own length (capped at 10 min)
+// Photo view time is a per-device setting; 0 = for as long as it is held.
+const IMAGE_VIEW_STEPS = [10000, 30000, 60000, 0];
+let imageViewMs = (() => {
+  try { const s = localStorage.getItem('najva:viewtime'); return s !== null && IMAGE_VIEW_STEPS.includes(Number(s)) ? Number(s) : 10000; } catch { return 10000; }
+})();
+function viewTimeLabel(ms) { return ms ? `${(ms / 1000).toLocaleString('fa-IR')} ثانیه` : 'تا وقتی نگه دارید'; }
+function applyViewTime() { $('viewtime-val').textContent = viewTimeLabel(imageViewMs); }
+function cycleViewTime() {
+  imageViewMs = IMAGE_VIEW_STEPS[(IMAGE_VIEW_STEPS.indexOf(imageViewMs) + 1) % IMAGE_VIEW_STEPS.length];
+  try { localStorage.setItem('najva:viewtime', String(imageViewMs)); } catch {}
+  applyViewTime();
+  toast(`زمان دیدن عکس: ${viewTimeLabel(imageViewMs)}`);
+}
 const touchIds = new Set();
 let pendingMedia = null; // { entry, kind }
 let keepTimer = null;
@@ -2957,13 +2970,14 @@ function openViewer(entry, kind) {
   media.src = entry.url;
   media.draggable = false;
   if (kind === 'video') { media.playsInline = true; media.autoplay = true; media.loop = false; }
+  const limit = kind === 'image' ? imageViewMs : VIEW_MS[kind] || 10000;
   const bar = el('div', 'view-time');
   const fill = el('i');
   bar.append(fill);
   v.append(media, bar, el('div', 'hint', 'برای بستن رها کنید'));
+  if (!limit) bar.hidden = true;
   v.hidden = false;
   if (kind === 'video') media.play().catch(() => { media.muted = true; media.play().catch(() => {}); });
-  const limit = VIEW_MS[kind] || 10000;
   let timer = null;
   if (kind === 'video') {
     // A video may be watched exactly once through while held; the bar follows playback.
@@ -2971,11 +2985,11 @@ function openViewer(entry, kind) {
       if (media.duration > 0 && Number.isFinite(media.duration)) fill.style.transform = `scaleX(${Math.max(0, 1 - media.currentTime / media.duration)})`;
     });
     media.addEventListener('ended', () => { close(); toast('ویدیو تمام شد'); });
-  } else {
+  } else if (limit) {
     fill.style.transition = `transform ${limit}ms linear`;
     requestAnimationFrame(() => { fill.style.transform = 'scaleX(0)'; });
   }
-  timer = setTimeout(() => { close(); toast('زمان دیدن تمام شد؛ دوباره نگه دارید'); }, limit);
+  if (limit) timer = setTimeout(() => { close(); toast('زمان دیدن تمام شد؛ دوباره نگه دارید'); }, limit);
   // Leaving the page mid-view is how most screenshot tools start: tell the peer.
   const suspicious = () => { close(); screenshotAttempt(); };
   const onVis = () => { if (document.hidden) suspicious(); };
@@ -5836,7 +5850,7 @@ function applyCallFx() {
 // A tab left open keeps running old code. When a newer version is published
 // (public/version.json), offer a reload; before entering a room, just reload.
 // Bump APP_VERSION and version.json together on every release.
-const APP_VERSION = '2026-11-16.2';
+const APP_VERSION = '2026-11-17.1';
 // The notice has its own bar (not the shared banner, which other events clear),
 // and is checked every few minutes, on return to the app and on every
 // reconnect, so restarting the relay after a release reaches everyone at once.
@@ -7154,6 +7168,7 @@ function bindUi() {
     if (act === 'manage') openManager();
     if (act === 'downloads') openDl(dlToMe().some((r) => r.op === 'req') || !dlFromMe().length ? 'in' : 'out');
     if (act === 'notify') { e.stopPropagation(); toggleNotify(); }
+    if (act === 'viewtime') { e.stopPropagation(); cycleViewTime(); }
     if (act === 'voicefx') {
       e.stopPropagation();
       // A recording keeps the voice it started with: drop it rather than mix.
@@ -7205,6 +7220,7 @@ function bindUi() {
     if (!leaving && (messages.size || call)) e.preventDefault();
   });
   setInterval(tickTimers, 1000);
+  applyViewTime();
   loadEmoji();
   setTtl(ttl);
   autoGrow();

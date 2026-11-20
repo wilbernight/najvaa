@@ -1101,6 +1101,7 @@ button.file-card { width: 100%; text-align: start; font: inherit; background: no
 .banner.info { background: var(--brand-soft); color: var(--text); border-color: rgba(79,127,100,.35); }
 .banner.info > .i { color: var(--brand-1); }
 .banner-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.menu-val { margin-inline-start: auto; padding: 2px 8px; border-radius: 99px; background: var(--surface-3); font-size: 12px; white-space: nowrap; }
 .menu-badge { margin-inline-start: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--brand); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
 .btn-icon.has-dot { position: relative; }
 .btn-icon.has-dot::after { content: ''; position: absolute; top: 6px; inset-inline-end: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--brand); }
